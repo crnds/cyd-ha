@@ -1,6 +1,7 @@
 #include "screen.h"
 #include "config.h"
 #include "theme.h"
+#include "logo_ha.h"
 #include <TFT_eSPI.h>
 #include <math.h>
 #include <string.h>
@@ -370,17 +371,51 @@ void screenRender() {
   for (uint8_t i = 0; i < NUM_DEVICES; i++) drawRow(i, false);
 }
 
-void screenMessage(const char* line1, const char* line2) {
+// Decodes the RLE logo a row at a time. A full 96x96 RGB565 buffer would be
+// 18 KB, far past the task stack, so this keeps one 192-byte row and blits it.
+// Runs may cross row boundaries, hence the run counter living outside the loop.
+static void drawLogo(int16_t ox, int16_t oy) {
+  uint16_t row[LOGO_HA_W];
+  size_t  ri  = 0;
+  uint8_t idx = 0, run = 0;
+
+  for (int16_t y = 0; y < LOGO_HA_H; y++) {
+    for (int16_t x = 0; x < LOGO_HA_W; x++) {
+      if (run == 0 && ri + 1 < LOGO_HA_RLE_LEN) {
+        idx = LOGO_HA_RLE[ri++];
+        run = LOGO_HA_RLE[ri++];
+      }
+      row[x] = LOGO_HA_PAL[idx];
+      if (run) run--;
+    }
+    tft.pushImage(ox, oy + y, LOGO_HA_W, 1, row);
+  }
+}
+
+void screenSplash(const char* line1, const char* line2) {
   tft.fillScreen(C_BG);
+
+  // Logo as the hero, captions beneath. The whole group is optically centred:
+  // logo (96) + gap + two text lines lands the block around the middle.
+  const int16_t lx = (SCR_W - LOGO_HA_W) / 2;
+  const int16_t ly = 40;
+  drawLogo(lx, ly);
+
   tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(4);
-  tft.setTextColor(C_TEXT);
-  tft.drawString(line1, SCR_W / 2, SCR_H / 2 - 14);
-  if (line2) {
+  if (line1) {
     tft.setTextFont(2);
     tft.setTextColor(C_TEXT2);
-    tft.drawString(line2, SCR_W / 2, SCR_H / 2 + 14);
+    tft.drawString(line1, SCR_W / 2, ly + LOGO_HA_H + 26);
   }
+  if (line2) {
+    // Kept as real text, not decoration: in the portal case this is the only
+    // place the AP name appears, and without it there is no way to know which
+    // hotspot to join.
+    tft.setTextFont(1);
+    tft.setTextColor(C_MUTED);
+    tft.drawString(line2, SCR_W / 2, ly + LOGO_HA_H + 46);
+  }
+
   screenInvalidate();
 }
 

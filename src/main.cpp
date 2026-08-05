@@ -372,7 +372,7 @@ static void updateNetState() {
 }
 
 static void setupWifi() {
-  screenMessage("Connecting", "Wi-Fi");
+  screenSplash("Connecting to Wi-Fi");
 
   if (strlen(WIFI_SSID) > 0) {
     WiFi.mode(WIFI_STA);
@@ -383,7 +383,7 @@ static void setupWifi() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    screenMessage("Wi-Fi setup", "Join AP: " AP_PORTAL_NAME);
+    screenSplash("Wi-Fi setup", "join the hotspot  " AP_PORTAL_NAME);
     WiFiManager wm;
     wm.setConfigPortalTimeout(180);
     wm.autoConnect(AP_PORTAL_NAME);

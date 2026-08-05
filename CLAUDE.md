@@ -75,6 +75,25 @@ CH340 bridge, VID 0x1A86 / PID 0x7523). Use `cu.`, not `tty.`.
 
 **Keep `upload_speed = 115200`** — faster rates corrupt the flash on this board.
 
+**`src/ui/logo_ha.h` is generated, not hand-written.** It holds Home Assistant's
+launch-screen mark as a 96×96 RLE-encoded palette bitmap for the boot splash
+(1366 B + palette, versus 18 KB raw). No SVG rasteriser is installed on this
+machine — no rsvg, inkscape, ImageMagick or PIL — so the pipeline runs through a
+browser:
+
+```sh
+# 1. rasterise: open scripts/gen_ha_logo.html, which renders the SVG to a canvas
+#    and POSTs the encoded result to scripts/logo_data.json
+# 2. convert:
+python3 scripts/gen_logo_header.py
+```
+
+`scripts/logo_data.json` is committed so step 2 can be re-run without a browser.
+The generator asserts the RLE covers exactly W×H pixels, so a truncated capture
+fails loudly rather than producing a corrupt bitmap. The palette's background
+entry is exactly `C_BG`, which is why the logo blits as an opaque rectangle with
+no transparency handling.
+
 There is no test suite. **`simulator.html` is the fast iteration path**: it
 re-implements the layout geometry in canvas, flags clipping/overflow, and mirrors
 `screenHitTest()`'s click mapping. Validate any layout change there before

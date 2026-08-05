@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>gen_ha_logo</title>
+<!--
+  Rasterises the Home Assistant logo into a 4-bit indexed RGB565 bitmap for
+  src/ui/logo_ha.h. No SVG rasteriser (rsvg/inkscape/PIL) is available on this
+  machine, so the browser does the rendering and window.__enc() returns the
+  encoded data.
+
+  The SVG paths are Home Assistant's own launch-screen mark, taken from the
+  instance at 192.168.1.117:8123. Using it on a device whose sole purpose is
+  controlling Home Assistant is the same use their official app makes of it.
+-->
+<body style="background:#07090d;margin:0;padding:20px;font:12px monospace;color:#9aa7bd">
+<canvas id="c" width="96" height="96" style="width:288px;height:288px;image-rendering:pixelated"></canvas>
+<div id="info"></div>
+
+<script>
+const SIZE = 96;
+const BG   = [0x07, 0x09, 0x0d];        // C_BG from theme.h
+
+const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+<path fill="#18BCF2" d="M240 224.762a15 15 0 0 1-15 15H15a15 15 0 0 1-15-15v-90c0-8.25 4.77-19.769 10.61-25.609l98.78-98.7805c5.83-5.83 15.38-5.83 21.21 0l98.79 98.7895c5.83 5.83 10.61 17.36 10.61 25.61v90-.01Z"/>
+<path fill="#F2F4F9" d="m107.27 239.762-40.63-40.63c-2.09.72-4.32 1.13-6.64 1.13-11.3 0-20.5-9.2-20.5-20.5s9.2-20.5 20.5-20.5 20.5 9.2 20.5 20.5c0 2.33-.41 4.56-1.13 6.65l31.63 31.63v-115.88c-6.8-3.3395-11.5-10.3195-11.5-18.3895 0-11.3 9.2-20.5 20.5-20.5s20.5 9.2 20.5 20.5c0 8.07-4.7 15.05-11.5 18.3895v81.27l31.46-31.46c-.62-1.96-.96-4.04-.96-6.2 0-11.3 9.2-20.5 20.5-20.5s20.5 9.2 20.5 20.5-9.2 20.5-20.5 20.5c-2.5 0-4.88-.47-7.09-1.29L129 208.892v30.88z"/>
+</svg>`;
+
+const rgb565 = (r,g,b) => ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+
+window.__ready = false;
+const img = new Image();
+img.onload = () => {
+  const g = document.getElementById('c').getContext('2d');
+  g.fillStyle = `rgb(${BG[0]},${BG[1]},${BG[2]})`;
+  g.fillRect(0, 0, SIZE, SIZE);
+  g.drawImage(img, 0, 0, SIZE, SIZE);
+
+  const px = g.getImageData(0, 0, SIZE, SIZE).data;
+
+  // Count distinct RGB565 values, keep the 16 most common as the palette, then
+  // map every pixel to its nearest palette entry. The logo is 3 flat fills, so
+  // the extra entries are all antialias blends along the edges — which is
+  // exactly what needs preserving to avoid a jagged mark.
+  const freq = new Map();
+  const vals = new Uint16Array(SIZE * SIZE);
+  for (let i = 0, p = 0; i < px.length; i += 4, p++) {
+    const v = rgb565(px[i], px[i+1], px[i+2]);
+    vals[p] = v;
+    freq.set(v, (freq.get(v) || 0) + 1);
+  }
+  const pal = [...freq.entries()].sort((a,b) => b[1]-a[1]).slice(0,16).map(e => e[0]);
+  while (pal.length < 16) pal.push(pal[0]);
+
+  const un565 = v => [((v>>11)&0x1F)*255/31, ((v>>5)&0x3F)*255/63, (v&0x1F)*255/31];
+  const nearest = v => {
+    const [r,g2,b] = un565(v);
+    let best = 0, bd = Infinity;
+    for (let k = 0; k < 16; k++) {
+      const [pr,pg,pb] = un565(pal[k]);
+      const d = (pr-r)**2 + (pg-g2)**2 + (pb-b)**2;
+      if (d < bd) { bd = d; best = k; }
+    }
+    return best;
+  };
+  const cache = new Map();
+  const idx = new Uint8Array(SIZE * SIZE);
+  for (let p = 0; p < vals.length; p++) {
+    const v = vals[p];
+    if (!cache.has(v)) cache.set(v, nearest(v));
+    idx[p] = cache.get(v);
+  }
+
+  // two 4-bit indices per byte, high nibble first
+  const packed = new Uint8Array(SIZE * SIZE / 2);
+  for (let p = 0, o = 0; p < idx.length; p += 2, o++)
+    packed[o] = (idx[p] << 4) | idx[p+1];
+
+  const hex = [...packed].map(b => b.toString(16).padStart(2,'0')).join('');
+  window.__enc = (from, to) => hex.slice(from, to);
+  window.__palette = pal.map(v => '0x' + v.toString(16).padStart(4,'0')).join(',');
+  window.__meta = { size: SIZE, bytes: packed.length, hexLen: hex.length,
+                    distinct: freq.size };
+  window.__ready = true;
+  document.getElementById('info').textContent =
+    `size ${SIZE}x${SIZE}  distinct colours ${freq.size}  packed ${packed.length} B  hex ${hex.length} chars`;
+};
+img.src = 'data:image/svg+xml;base64,' + btoa(SVG);
+</script>
+</body>
