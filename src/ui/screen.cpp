@@ -392,31 +392,11 @@ static void drawLogo(int16_t ox, int16_t oy) {
   }
 }
 
-void screenSplash(const char* line1, const char* line2) {
+void screenSplash() {
   tft.fillScreen(C_BG);
-
-  // With no caption the logo IS the whole composition, so centre it exactly.
-  // With captions it sits higher so the group as a whole reads as centred —
-  // leaving it at the caption offset would look bottom-heavy and off-centre.
-  const int16_t lx = (SCR_W - LOGO_HA_W) / 2;
-  const int16_t ly = line1 ? 40 : (SCR_H - LOGO_HA_H) / 2;
-  drawLogo(lx, ly);
-
-  tft.setTextDatum(MC_DATUM);
-  if (line1) {
-    tft.setTextFont(2);
-    tft.setTextColor(C_TEXT2);
-    tft.drawString(line1, SCR_W / 2, ly + LOGO_HA_H + 26);
-  }
-  if (line2) {
-    // Kept as real text, not decoration: in the portal case this is the only
-    // place the AP name appears, and without it there is no way to know which
-    // hotspot to join.
-    tft.setTextFont(1);
-    tft.setTextColor(C_MUTED);
-    tft.drawString(line2, SCR_W / 2, ly + LOGO_HA_H + 46);
-  }
-
+  // Logo only, exactly centred. Both boot states (connecting and Wi-Fi portal)
+  // render identically — see the note in screen.h about what that costs.
+  drawLogo((SCR_W - LOGO_HA_W) / 2, (SCR_H - LOGO_HA_H) / 2);
   screenInvalidate();
 }
 

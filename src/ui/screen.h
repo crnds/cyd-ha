@@ -15,11 +15,14 @@ void screenInvalidate();
 // strip vertically, so a tap slightly high or low still registers.
 bool screenHitTest(int16_t px, int16_t py, int8_t& devIdx, int8_t& btnIdx);
 
-// Boot splash: the Home Assistant logo, optionally with captions beneath.
-// Called with no arguments it is logo-only and exactly centred, which is the
-// normal boot appearance. Captions exist for the Wi-Fi portal state, where the
-// hotspot name is the only way for someone to complete setup.
-void screenSplash(const char* line1 = nullptr, const char* line2 = nullptr);
+// Boot splash: the Home Assistant logo, centred, no text.
+//
+// Used for BOTH boot states — connecting, and the Wi-Fi captive portal — so the
+// two are visually indistinguishable. That is intentional, but note the cost:
+// when no saved credentials work, the device sits on a bare logo with nothing
+// on screen naming the AP_PORTAL_NAME hotspot to join. Recovery then depends on
+// the README or the serial log. Deliberate trade for a clean splash.
+void screenSplash();
 
 // Calibration mode (env:calib) — draws a crosshair target at (x,y) with
 // progress text. Not compiled into the normal firmware's flow, but harmless.

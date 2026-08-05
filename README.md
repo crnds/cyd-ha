@@ -78,8 +78,19 @@ Keep `upload_speed = 115200`. Anything faster caused serial corruption while
 flashing this board.
 
 **4. Wi-Fi.** Leave `WIFI_SSID`/`WIFI_PASS` empty in `secrets.h` and the device
-opens a captive-portal AP named `CYD-HA-Setup` on first boot — join it from a
-phone and enter credentials. Or hardcode them in `secrets.h` to skip the portal.
+opens a captive portal on first boot — join it from a phone and enter
+credentials. Or hardcode them in `secrets.h` to skip the portal.
+
+> ### ⚠ If the screen shows only the Home Assistant logo and never reaches the controls
+>
+> It is waiting for Wi-Fi setup. **Join the hotspot `CYD-HA-Setup` from a phone**
+> and enter your credentials.
+>
+> The boot splash is deliberately logo-only with no text, so **nothing on screen
+> tells you this** — the portal state and the normal connecting state look
+> identical. This README and the serial log (`pio device monitor`) are the only
+> places the hotspot name appears. The portal times out after 180 s, after which
+> the device reboots and tries again.
 
 ## simulator.html
 

@@ -383,7 +383,17 @@ static void setupWifi() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    screenSplash("Wi-Fi setup", "join the hotspot  " AP_PORTAL_NAME);
+    // secrets.h carries no credentials, so hand off to WiFiManager. It usually
+    // connects straight away from its OWN NVS store (that is the normal path
+    // here) and only opens the hotspot when that fails — so this is NOT
+    // necessarily a "needs setup" state, and the message must not claim it is.
+    //
+    // The splash carries no text, so if the portal DOES open, the hotspot name
+    // appears nowhere on screen. Serial is the only in-situ hint; see README.
+    screenSplash();
+    Serial.printf("wifi: no creds in secrets.h -> WiFiManager; if it cannot "
+                  "reconnect it opens the hotspot \"%s\" for %ds\n",
+                  AP_PORTAL_NAME, 180);
     WiFiManager wm;
     wm.setConfigPortalTimeout(180);
     wm.autoConnect(AP_PORTAL_NAME);
