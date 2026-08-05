@@ -223,6 +223,16 @@ static void drawRow(uint8_t dev, bool force) {
   const bool    first = force || !sn.valid;
   const int16_t top   = rowTop(dev);
 
+  // On a first/forced draw, clear the ENTIRE row band. The per-region clears
+  // below only cover the 10px label strip and the button rectangles themselves,
+  // which leaves the 4px bands above and below the button strip, the gaps
+  // between buttons, and the side margins holding whatever was underneath.
+  // screenMessage()'s boot text ("Connecting" / "Wi-Fi") sits at y~93-142, so
+  // fragments of it survived in those slivers and stayed on screen for good.
+  // Starts at top-1 to catch the row above ROWS_Y0; the separator at top-2 is
+  // drawn after this, so it survives.
+  if (first) tft.fillRect(0, top - 1, SCR_W, ROW_H + 1, C_BG);
+
   // ── region 1: name (left) + state (right) ──
   char st[48];
   stateText(d, st, sizeof(st));
@@ -306,6 +316,11 @@ static void drawStatus(bool force) {
   int32_t shown = (age < 0) ? -2 : (age >= 5 ? age : -1);
 
   bool force_ = force || !statusSnap.valid;
+
+  // Same gap problem as the rows: the two half-width clears below leave
+  // x=STATUS_DOTS_W..SCR_W-STATUS_AGE_W uncleared forever. Nothing draws there
+  // today, but a leftover from screenMessage() would be permanent.
+  if (force_) tft.fillRect(0, 0, SCR_W, STATUS_H, C_BG);
 
   if (force_ || wifiOk != statusSnap.wifiOk || S.haOk != statusSnap.haOk) {
     tft.fillRect(0, 0, STATUS_DOTS_W, STATUS_H, C_BG);
