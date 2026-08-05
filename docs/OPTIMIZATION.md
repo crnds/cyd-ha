@@ -277,8 +277,12 @@ point. Branch: `apply-optimization-plan`, off `main` at the baseline commit.
 - **External-change latency: 1009–1036 ms** (was a 6000 ms worst case). Verified by
   driving `light.bulb_1` to 1% / 100% / 30% over the API and timing the device's
   own log line.
-- **Heap flat**: 244016 → 244044 → 243772 bytes free over 62 s — fluctuation, no
-  downward drift. `getMaxAllocHeap` steady at 110580.
+- **Heap: not yet proven flat.** Over 62 s it looked stable (244016 → 244044 →
+  243772), but a later sample at `up=422s` read 243608 — roughly −400 B across
+  7 minutes. That is either settling or a slow leak of ~60 B/min, and 62 s of
+  data cannot tell the two apart. `getMaxAllocHeap` is steady at 110580, which
+  argues against fragmentation. A 25-minute soak is running; see §6.
+  The earlier "flat" reading was over too short a window to claim.
 - **Template parse correct** end to end: `on,3,2202` / `on,254,2202` / `on,76,2202`.
 - Builds clean, both `env:cyd` and `env:calib`. RAM 15.0%, flash 31.1%.
 
