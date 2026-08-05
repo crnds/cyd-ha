@@ -135,30 +135,28 @@ static bool readTouch(int16_t& sx, int16_t& sy,
 }
 
 // ── HA poll scheduling ───────────────────────────────────
-// One entity per tick, round-robin, so each of the 4 devices refreshes every
-// ~4 * HA_POLL_MS. A tap schedules a targeted re-poll that jumps the queue.
+// All four devices refresh together in one templated request every HA_POLL_MS,
+// so every device is at most HA_POLL_MS stale. The previous round-robin left
+// each device up to 4 * HA_POLL_MS behind. A tap schedules an early refresh to
+// reconcile the optimistic guess against real state.
 
-static uint8_t  pollIdx       = 0;
 static uint32_t nextPollMs    = 0;
 static uint32_t backoffMs     = 0;
-static int8_t   reconcileDev  = -1;
 static uint32_t reconcileAtMs = 0;
+static bool     reconcilePend = false;
 
 static void servicePoll() {
   uint32_t now = millis();
+  bool due = (int32_t)(now - nextPollMs) >= 0;
 
-  if (reconcileDev >= 0 && (int32_t)(now - reconcileAtMs) >= 0) {
-    uint8_t d = (uint8_t)reconcileDev;
-    reconcileDev = -1;
-    haPollDevice(S.dev[d]);
-    nextPollMs = now + HA_POLL_MS;
+  if (reconcilePend && (int32_t)(now - reconcileAtMs) >= 0) {
+    reconcilePend = false;
+    due = true;                     // pull the next refresh forward
+  } else if (!due) {
     return;
   }
 
-  if ((int32_t)(now - nextPollMs) < 0) return;
-
-  bool ok = haPollDevice(S.dev[pollIdx]);
-  pollIdx = (pollIdx + 1) % NUM_DEVICES;
+  bool ok = haPollAll();
 
   if (ok) {
     backoffMs  = 0;
@@ -168,6 +166,20 @@ static void servicePoll() {
                            : RETRY_BASE_MS;
     nextPollMs = now + backoffMs;
   }
+}
+
+// Heap watch — the poll path no longer allocates (the template response is
+// parsed in fixed buffers), so this should sit flat. Logged so a soak test can
+// prove it rather than assume it.
+static void logHeap() {
+  static uint32_t next = 0;
+  if ((int32_t)(millis() - next) < 0) return;
+  next = millis() + 30000UL;
+  Serial.printf("heap: free=%u min=%u largest=%u  up=%lus\n",
+                (unsigned)ESP.getFreeHeap(),
+                (unsigned)ESP.getMinFreeHeap(),
+                (unsigned)ESP.getMaxAllocHeap(),
+                (unsigned long)(millis() / 1000));
 }
 
 // ── actions ──────────────────────────────────────────────
@@ -256,9 +268,10 @@ static void doAction(int8_t devIdx, int8_t btn) {
     default: break;
   }
 
-  // 3. reconcile or roll back
+  // 3. reconcile or roll back. The refresh covers all four devices in one
+  // request now, so there is no per-device queue to target.
   if (ok) {
-    reconcileDev  = devIdx;
+    reconcilePend = true;
     reconcileAtMs = millis() + RECONCILE_MS;
   } else {
     d = before;
@@ -552,5 +565,6 @@ void loop() {
   if (S.netState == 1) servicePoll();
   handleTouch();
   screenRender();
+  logHeap();
   delay(20);
 }
