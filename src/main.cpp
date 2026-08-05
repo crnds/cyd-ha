@@ -403,6 +403,37 @@ static void setupWifi() {
   Serial.printf("wifi: %s  ip=%s\n",
                 S.netState == 1 ? "connected" : "FAILED",
                 WiFi.localIP().toString().c_str());
+
+  if (S.netState == 1) {
+    // Kicks off the core's SNTP client, which then resyncs on its own — there is
+    // no polling code for the clock anywhere. Deliberately does NOT block on the
+    // first sync: the status bar shows "--:--" until it lands, which is a second
+    // or two, and blocking here would just delay the UI appearing.
+    configTzTime(TZ_INFO, NTP_SERVER_1, NTP_SERVER_2);
+    Serial.printf("ntp: %s / %s  tz=%s\n", NTP_SERVER_1, NTP_SERVER_2, TZ_INFO);
+  }
+}
+
+// Logs the wall clock once, the first time SNTP produces a valid time. Exists so
+// the timezone can actually be verified against a known-good source rather than
+// assumed correct.
+static void logClockOnce() {
+  static bool done = false;
+  if (done) return;
+  struct tm lt;
+  if (!getLocalTime(&lt, 0)) return;
+  done = true;
+
+  // Log local AND UTC so the offset is self-evident: Asia/Bangkok must read
+  // exactly UTC+7. Printing only local time would look plausible while being
+  // hours wrong, which is the whole failure mode worth guarding against.
+  time_t nowSec = time(nullptr);
+  struct tm gt;
+  gmtime_r(&nowSec, &gt);
+  char lbuf[32], gbuf[32];
+  strftime(lbuf, sizeof(lbuf), "%Y-%m-%d %H:%M:%S", &lt);
+  strftime(gbuf, sizeof(gbuf), "%Y-%m-%d %H:%M:%S", &gt);
+  Serial.printf("ntp: synced  local %s  utc %s  tz=%s\n", lbuf, gbuf, TZ_INFO);
 }
 
 #if CALIB_MODE
@@ -584,6 +615,7 @@ void loop() {
   if (S.netState == 1) servicePoll();
   handleTouch();
   screenRender();
+  logClockOnce();
   logHeap();
   delay(20);
 }

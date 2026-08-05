@@ -180,10 +180,13 @@ without step 1 every tap feels ignored. Preserve this ordering.
 **Rendering** (`src/ui/screen.cpp`) is **dirty-region based**, tracked at three
 granularities. `screenRender()` runs every loop pass and repaints only what
 changed:
-- The **status bar** is two independent halves (dots / freshness text). It also
-  deliberately shows a static `LIVE` rather than a counting age — every poll
-  resets `haOkMs`, so a live age oscillated `0↔1` and repainted the full bar
-  several times a second. Visible flicker. Don't put a live counter back.
+- The **status bar** is two independent halves (dots / clock). The right half is
+  a 24h wall clock and repaints once a minute, which is invisible. It replaced a
+  freshness readout that counted seconds since `haOkMs` — and since every poll
+  resets that timestamp, the number oscillated `0↔1` and repainted the full bar
+  several times a second. **Don't put any per-second value here**; that region is
+  minute-rate by design. Connection health belongs to the dots, and staleness to
+  the row dimming, not to this readout.
 - Each **row's text line** is compared by its rendered string.
 - Each **button** is compared by its *visual* state (`BtnVis`), not by underlying
   values — so two brightness values mapping to the same highlight cost nothing,
@@ -192,6 +195,18 @@ changed:
 GFX/GLCD fonts don't paint their own background, so each dirty region is
 `fillRect`-cleared first. The row separator sits at `top - 2`, outside every
 clear rect, so it is painted once.
+
+**Clock.** NTP via `configTzTime(TZ_INFO, ...)` in `setupWifi()`, then the core's
+SNTP client resyncs itself — there is no clock polling code, and none should be
+added. `getLocalTime(&tm, 0)` is called with a **zero** timeout because it runs on
+every render pass and must never block; it returns false until the first sync
+lands, which is what shows `--:--`.
+
+`TZ_INFO` is a POSIX TZ string with an **inverted sign**: `"ICT-7"` means UTC**+**7
+(Asia/Bangkok, no DST so no rule half). Verified on hardware by logging local and
+UTC together — printing only local time would look plausible while being hours
+wrong, which is exactly the failure worth guarding against. Measured: local
+23:00:57 / UTC 16:00:57, and ~0 s skew against the host's `TZ=Asia/Bangkok date`.
 
 **Backlight ordering is a trap.** The LEDC setup in `setup()` **must** come after
 `screenBegin()`: `TFT_eSPI::init()` does `pinMode(TFT_BL, OUTPUT); digitalWrite(

@@ -193,7 +193,9 @@ function draw(){
     font1(label,x+7,STATUS_H/2-4,ok?C_TEXT2:C_RED);
   };
   dot(10,true,'WIFI'); dot(60,haOk,'HA');
-  font1(haOk?'LIVE':'no data', SCR_W-BTN_X0, STATUS_H/2-4, haOk?C_TEXT2:C_DIM,'right');
+  // 24h clock in Asia/Bangkok, matching the firmware's NTP + TZ_INFO="ICT-7"
+  const clk=new Date().toLocaleTimeString('en-GB',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'});
+  font1(clk, SCR_W-BTN_X0, STATUS_H/2-4, C_TEXT, 'right');
   g.fillStyle=C_BORDER; g.fillRect(0,STATUS_H,SCR_W,1);
 
   dev.forEach((d,i)=>{

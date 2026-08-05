@@ -8,6 +8,16 @@
 #define AP_PORTAL_NAME     "CYD-HA-Setup"
 #define WIFI_CONNECT_MS    20000UL   // give up and open the portal after this
 
+// ── Clock ────────────────────────────────────────────────
+// NTP rather than an HTTP time API: keyless, works anywhere, and the SNTP client
+// in the ESP32 core keeps itself resynced with no code from us.
+#define NTP_SERVER_1       "pool.ntp.org"
+#define NTP_SERVER_2       "time.google.com"
+// POSIX TZ string, and note the sign is INVERTED from what you would expect:
+// "ICT-7" means UTC+7, i.e. Asia/Bangkok. Bangkok has no DST, so no rule half.
+// Lookup table: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+#define TZ_INFO            "ICT-7"
+
 // ── Cadences / retry ─────────────────────────────────────
 // One entity polled per tick, round-robin over 4 devices, so each device
 // refreshes every ~4 * HA_POLL_MS = 6s. That is the worst-case latency for a

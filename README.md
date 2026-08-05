@@ -7,7 +7,7 @@ screen doubles as a status display.
 
 ```
 ┌────────────────────────────────────────────────┐
-│ ●WIFI ●HA                                LIVE │
+│ ●WIFI ●HA                               23:00 │
 ├────────────────────────────────────────────────┤
 │ TRADFRI BULB 1                     30%  2700K │
 │ [OFF][ 1%][30%][100%][2202K][4000K]           │
@@ -22,8 +22,16 @@ screen doubles as a status display.
 
 All four devices refresh together every 1.5 s via a single templated request, so
 a change made from the HA app shows up here in about a second (measured
-1009–1036 ms). The right-hand readout stays `LIVE` while polling is healthy and
-only becomes an elapsed time once data actually goes stale.
+1009–1036 ms).
+
+The top-right shows a 24-hour clock in **Asia/Bangkok**, set over NTP — keyless,
+no API account, and the ESP32's SNTP client resyncs itself with no polling code.
+It reads `--:--` for the second or two before the first sync lands. Change the
+zone via `TZ_INFO` in `include/config.h`; the POSIX sign is inverted, so
+`"ICT-7"` means UTC**+**7.
+
+Connection health is the two dots, not the clock: `WIFI` and `HA` go red on
+failure, and individual rows dim when their data goes stale.
 
 The currently-active state is filled in Home Assistant cyan. On a lit bulb a
 brightness button *and* a colour swatch can both be active — they are

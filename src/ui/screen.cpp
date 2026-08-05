@@ -61,7 +61,7 @@ struct StatusSnap {
   bool    valid;
   bool    wifiOk;
   bool    haOk;
-  int32_t shown;   // -2 no data, -1 live, >=0 seconds stale
+  int16_t hhmm;    // local time as hour*60+min; -1 while NTP is unsynced
 };
 static StatusSnap statusSnap;
 
@@ -302,25 +302,23 @@ static void drawDot(int16_t x, int16_t y, bool ok, const char* label) {
 }
 
 #define STATUS_DOTS_W  108   // left region: the two connectivity dots
-#define STATUS_AGE_W   108   // right region: the freshness readout
+#define STATUS_CLK_W   108   // right region: the clock
 
 static void drawStatus(bool force) {
-  uint32_t now  = millis();
-  bool wifiOk   = (S.netState == 1);
-  int32_t age   = S.haOkMs ? (int32_t)((now - S.haOkMs) / 1000) : -1;
+  bool wifiOk = (S.netState == 1);
 
-  // Don't surface a live-counting age at all. Every successful poll resets
-  // haOkMs, so while polling is healthy the number just oscillates 0<->1 and
-  // tells you nothing you can't read from the HA dot. Only once data actually
-  // goes stale does the elapsed time become worth showing — and by then it
-  // increments at a sane 1 Hz instead of thrashing at the poll rate.
-  int32_t shown = (age < 0) ? -2 : (age >= 5 ? age : -1);
+  // Local wall clock, 24h. getLocalTime with a 0 ms timeout returns immediately
+  // — it must never block, since this runs on every render pass. It reports
+  // false until SNTP has landed, which is what drives the "--:--" placeholder.
+  int16_t hhmm = -1;
+  struct tm tmv;
+  if (getLocalTime(&tmv, 0)) hhmm = (int16_t)(tmv.tm_hour * 60 + tmv.tm_min);
 
   bool force_ = force || !statusSnap.valid;
 
   // Same gap problem as the rows: the two half-width clears below leave
-  // x=STATUS_DOTS_W..SCR_W-STATUS_AGE_W uncleared forever. Nothing draws there
-  // today, but a leftover from screenMessage() would be permanent.
+  // x=STATUS_DOTS_W..SCR_W-STATUS_CLK_W uncleared forever. Nothing draws there
+  // today, but a leftover from screenSplash() would be permanent.
   if (force_) tft.fillRect(0, 0, SCR_W, STATUS_H, C_BG);
 
   if (force_ || wifiOk != statusSnap.wifiOk || S.haOk != statusSnap.haOk) {
@@ -329,26 +327,26 @@ static void drawStatus(bool force) {
     drawDot(60, STATUS_H / 2, S.haOk, "HA");
   }
 
-  if (force_ || shown != statusSnap.shown) {
-    tft.fillRect(SCR_W - STATUS_AGE_W, 0, STATUS_AGE_W, STATUS_H, C_BG);
-    char right[24];
-    uint16_t fg;
-    if (shown == -2)      { snprintf(right, sizeof(right), "no data");  fg = C_DIM; }
-    else if (shown == -1) { snprintf(right, sizeof(right), "LIVE");     fg = C_TEXT2; }
-    else if (shown < 100) { snprintf(right, sizeof(right), "%lds ago", (long)shown); fg = C_DIM; }
-    else                  { snprintf(right, sizeof(right), "%ldm ago", (long)(shown / 60)); fg = C_DIM; }
+  // Repaints once a minute. Nothing else lives in this region, so a minute-rate
+  // repaint of 108x18 px is invisible — unlike the per-second freshness counter
+  // that used to live here and made the whole bar flicker.
+  if (force_ || hhmm != statusSnap.hhmm) {
+    tft.fillRect(SCR_W - STATUS_CLK_W, 0, STATUS_CLK_W, STATUS_H, C_BG);
+    char clk[8];
+    if (hhmm < 0) snprintf(clk, sizeof(clk), "--:--");
+    else          snprintf(clk, sizeof(clk), "%02d:%02d", hhmm / 60, hhmm % 60);
 
-    tft.setTextFont(1);
+    tft.setTextFont(2);                    // readable across a dark room
     tft.setTextDatum(MR_DATUM);
-    tft.setTextColor(fg);
-    tft.drawString(right, SCR_W - BTN_X0, STATUS_H / 2);
+    tft.setTextColor(hhmm < 0 ? C_DIM : C_TEXT);
+    tft.drawString(clk, SCR_W - BTN_X0, STATUS_H / 2);
   }
 
   // Sits at y == STATUS_H, outside both fillRects above, so it survives their
   // clears and only needs painting once.
   if (force_) tft.drawFastHLine(0, STATUS_H, SCR_W, C_BORDER);
 
-  statusSnap = { true, wifiOk, S.haOk, shown };
+  statusSnap = { true, wifiOk, S.haOk, hhmm };
 }
 
 // ── public API ───────────────────────────────────────────
