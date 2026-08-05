@@ -225,7 +225,16 @@ static void doAction(int8_t devIdx, int8_t btn) {
         float t = d.target + (btn == 3 ? d.tStep : -d.tStep);
         if (t < d.tMin) t = d.tMin;
         if (t > d.tMax) t = d.tMax;
-        if (t == d.target) return;      // already clamped at the limit
+        // Already at the limit. Flash the row instead of returning silently:
+        // six consecutive T+ taps at max once produced no feedback whatsoever,
+        // which reads as "the tap missed" rather than "you are at 31". Compared
+        // with an epsilon because these are floats off a /10 division.
+        if (fabsf(t - d.target) < 0.01f) {
+          d.errMs = millis();
+          Serial.printf("ac: already at limit %.1f (min %.1f max %.1f)\n",
+                        d.target, d.tMin, d.tMax);
+          return;
+        }
         kind = ACT_C_TEMP; fArg = t;
         break;
       }
