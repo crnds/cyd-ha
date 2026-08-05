@@ -34,6 +34,7 @@
     <button onclick="setAll(false)">all bulbs off</button>
     <button onclick="stale=!stale;draw()">toggle stale</button>
     <button onclick="haOk=!haOk;draw()">toggle HA down</button>
+    <button onclick="dev[1].avail=!dev[1].avail;draw()">bulb 2 unavailable</button>
   </div>
   <div class="row">
     <label>Bulb 1 brightness (off-preset levels test tolerances)</label>
@@ -58,7 +59,7 @@ const AC_BTN_W=58, AC_BTN_PITCH=AC_BTN_W+BTN_GAP;
 const BULB_BTNS=6, AC_BTNS=5;
 
 const BRI_LOW=1, BRI_MID=30, BRI_HIGH=100;
-const KELVIN_WARM=2200, KELVIN_COOL=4000;
+const KELVIN_WARM=2202, KELVIN_COOL=4000;
 const PCT_LOW_MAX=5, PCT_MID_MIN=25, PCT_MID_MAX=35, PCT_HIGH_MIN=95;
 const KELVIN_WARM_MAX=2500, KELVIN_COOL_MIN=3700;
 
@@ -73,10 +74,10 @@ const AC_LABEL=['OFF','AC','DRY','T+','T-'];
 
 let stale=false, haOk=true;
 let dev=[
-  {name:'TRADFRI BULB 1', kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true},
-  {name:'TRADFRI BULB 2', kind:'light',   on:false, pct:100, kelvin:2200, ct:true, known:true},
-  {name:'TRADFRI BULB 3', kind:'light',   on:true,  pct:100, kelvin:4000, ct:true, known:true},
-  {name:'SENSIBO SKY AC', kind:'climate', mode:'cool', target:24, room:27,  known:true},
+  {name:'TRADFRI BULB 1', kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
+  {name:'TRADFRI BULB 2', kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
+  {name:'TRADFRI BULB 3', kind:'light',   on:true,  pct:100, kelvin:4000, ct:true, known:true, avail:true},
+  {name:'SENSIBO SKY AC', kind:'climate', mode:'cool', target:24, room:27,  known:true, avail:true},
 ];
 
 const cv=document.getElementById('c'), g=cv.getContext('2d'), S=3;
@@ -94,6 +95,7 @@ function btnRect(i,b){
 }
 
 function btnActive(d,b){
+  if(!d.avail) return false;
   if(d.kind==='climate'){
     if(b===0) return d.mode==='off';
     if(b===1) return d.mode==='cool';
@@ -140,9 +142,10 @@ function roundRect(x,y,w,h,r,fill,stroke){
 
 let clipWarnings=[];
 
-function drawTextButton(r,label,active){
+function drawTextButton(r,label,active,disabled){
   let fill,edge,fg;
-  if(active){ fill=C_ACCENT; edge=C_ACCENT; fg=C_BG; }
+  if(disabled){ fill=C_BG; edge=C_BORDER; fg=C_MUTED; }
+  else if(active){ fill=C_ACCENT; edge=C_ACCENT; fg=C_BG; }
   else      { fill=C_SURFACE; edge=C_BORDER; fg=C_TEXT2; }
   roundRect(r.x,r.y,r.w,r.h,4,fill,edge);
   const maxW=r.w-6;
@@ -171,6 +174,7 @@ function mix(a,b,t){
 
 function stateText(d){
   if(!d.known) return '--';
+  if(!d.avail) return 'UNAVAILABLE';
   if(d.kind==='climate'){
     const m={off:'OFF',cool:'COOL',dry:'DRY'}[d.mode]||d.mode.toUpperCase();
     return `${m}  set ${d.target}  room ${d.room}`;
@@ -189,7 +193,7 @@ function draw(){
     font1(label,x+7,STATUS_H/2-4,ok?C_TEXT2:C_RED);
   };
   dot(10,true,'WIFI'); dot(60,haOk,'HA');
-  font1(haOk?'2s ago':'no data', SCR_W-BTN_X0, STATUS_H/2-4, haOk?C_TEXT2:C_DIM,'right');
+  font1(haOk?'LIVE':'no data', SCR_W-BTN_X0, STATUS_H/2-4, haOk?C_TEXT2:C_DIM,'right');
   g.fillStyle=C_BORDER; g.fillRect(0,STATUS_H,SCR_W,1);
 
   dev.forEach((d,i)=>{
@@ -199,16 +203,17 @@ function draw(){
     const nameW=font1(d.name,BTN_X0,top+ROW_LABEL_DY, stale?C_DIM:C_TEXT);
     const st=stateText(d);
     const stW=st.length*6;
-    font1(st,SCR_W-BTN_X0,top+ROW_LABEL_DY, stale?C_DIM:C_TEXT2,'right');
+    font1(st,SCR_W-BTN_X0,top+ROW_LABEL_DY, !d.avail?C_RED:(stale?C_DIM:C_TEXT2),'right');
     if(BTN_X0+nameW > SCR_W-BTN_X0-stW-4)
       clipWarnings.push(`row ${i}: name+state overlap ("${d.name}" + "${st}")`);
 
     for(let b=0;b<btnCount(d);b++){
       const r=btnRect(i,b), active=btnActive(d,b);
-      if(d.kind==='climate')  drawTextButton(r,AC_LABEL[b],active);
-      else if(b===4)          drawSwatch(r,C_WARM,'2200K',active,!d.ct);
-      else if(b===5)          drawSwatch(r,C_COOL,'4000K',active,!d.ct);
-      else                    drawTextButton(r,BULB_LABEL[b],active);
+      const dis=!d.avail || (b>=4 && d.kind==='light' && !d.ct);
+      if(d.kind==='climate')  drawTextButton(r,AC_LABEL[b],active,dis);
+      else if(b===4)          drawSwatch(r,C_WARM,KELVIN_WARM+'K',active,dis);
+      else if(b===5)          drawSwatch(r,C_COOL,KELVIN_COOL+'K',active,dis);
+      else                    drawTextButton(r,BULB_LABEL[b],active,dis);
       if(r.x+r.w > SCR_W) clipWarnings.push(`row ${i} btn ${b} overflows right edge (${r.x+r.w}px)`);
     }
   });
