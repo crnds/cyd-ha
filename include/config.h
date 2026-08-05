@@ -98,7 +98,10 @@
 
 // ── Backlight ────────────────────────────────────────────
 #define BL_CHANNEL     0
-#define BL_DUTY        230   // fixed brightness, ~90% of 255
+// Fixed brightness, 0-255. 120 is ~47% — chosen for a bedroom, where a 90%
+// panel is glaring at night. Only takes effect because the LEDC setup in
+// setup() runs AFTER screenBegin(); see the comment there before moving it.
+#define BL_DUTY        120
 
 // ── Layout (320x240 landscape) ───────────────────────────
 #define SCR_W          320

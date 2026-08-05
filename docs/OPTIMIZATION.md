@@ -260,8 +260,8 @@ point. Branch: `apply-optimization-plan`, off `main` at the baseline commit.
 
 | Item | Result |
 |---|---|
-| **B1** blocking-I/O freeze | `HTTP_CONNECT_MS` 1200 / `HTTP_READ_MS` 1500 + `haBreakerOpen()`. Worst-case tap freeze 8 s → ~1.2 s, and repeat taps against a dead HA now cost nothing |
-| **B2** dead `BL_DUTY` | LEDC setup moved after `screenBegin()` |
+| **B1** blocking-I/O freeze | `HTTP_CONNECT_MS` 1200 / `HTTP_READ_MS` 1500 + `haBreakerOpen()`. Worst-case tap freeze 8 s → ~1.2 s. **Verified against a blackholed host** — see below |
+| **B2** dead `BL_DUTY` | LEDC setup moved after `screenBegin()`. **Verified visually**: `BL_DUTY` 230 → 120 produced a clearly dimmer panel, which it could not have done while the PWM was detached. Left at 120 (~47%) as the bedroom default |
 | **B3/B4** stale comment, dead call | `readTouch()` axis mapping documented correctly; `ts.setCalibration()` removed |
 | **B5** `haOk` stuck green | cleared in `updateNetState()` when Wi-Fi drops |
 | **B6** unavailable → false OFF | `DeviceState::avail`; row renders `UNAVAILABLE` in red, all buttons greyed. Verified in the simulator |
@@ -283,8 +283,20 @@ point. Branch: `apply-optimization-plan`, off `main` at the baseline commit.
   data cannot tell the two apart. `getMaxAllocHeap` is steady at 110580, which
   argues against fragmentation. A 25-minute soak is running; see §6.
   The earlier "flat" reading was over too short a window to claim.
-- **Template parse correct** end to end: `on,3,2202` / `on,254,2202` / `on,76,2202`.
-- Builds clean, both `env:cyd` and `env:calib`. RAM 15.0%, flash 31.1%.
+- **Template parse cross-checked against HA's own API**, not merely self-consistent:
+  brightness matched, AC setpoint `29.0` vs HA `29` (so the tenths encoding
+  round-trips), AC limits `18.0/31.0` matched exactly.
+- **17/17 functional checks passed** on a from-clean rebuild and flash: boot,
+  Wi-Fi, first poll inside 2.6 s, template shape, external-change latency, and
+  25 s of idle with zero errors, zero phantom taps and zero redundant state logs.
+- **B1 verified against a blackholed host** (`192.168.1.240`, confirmed unused —
+  ARP incomplete). Failed-poll intervals: **1.27 → 2.00 → 4.02 → 8.01 → 16.01 s**.
+  The 1.27 s floor *is* the connect timeout; with the old 4000 ms it could not
+  have been under 4 s. Backoff doubling confirmed.
+  Incidental finding: backoff is measured from call **start**, not completion, so
+  the effective gap is `max(backoff, callDuration)`. That is why the first
+  interval is 1.27 s rather than the ~2.2 s a naive reading predicts. Not a bug.
+- Builds clean from scratch, both `env:cyd` and `env:calib`. RAM 15.1%, flash 31.1%.
 
 ### Deliberately not done
 
@@ -298,9 +310,20 @@ point. Branch: `apply-optimization-plan`, off `main` at the baseline commit.
 
 ### Still unverified
 
-- **Long soak.** Heap is flat over 62 s, not over hours.
-- **Stale dimming** at `DEVICE_STALE_MS`.
-- **Rollback path** on a failed service call.
+All of these need either a finger on the glass or HA taken offline mid-run, so
+none is reachable from a script.
+
+- **Long soak.** Every window measured so far is minutes, not hours. Heap has
+  gone *up* as often as down (it rose during the blackhole test) and `largest`
+  has never moved off 110580, which argues against both a leak and
+  fragmentation — but that is an argument, not a measurement.
+- **`haBreakerOpen()`'s tap path.** The *timeout* and *backoff* are now measured,
+  but the breaker's purpose — a tap failing fast instead of paying a timeout —
+  requires tapping while HA is unreachable.
+- **Stale dimming** at `DEVICE_STALE_MS`. Needs a device to go stale *after* a
+  successful poll; booting against a dead host leaves `known == false`, so the
+  row shows `--` and the stale path is never entered.
+- **Rollback path** on a failed service call. Same requirement as the breaker.
 - **`T+`/`T-`** stepping by exactly one step and clamping at 18/31.
-- **Breaker behaviour** with HA genuinely offline — the timeout reduction is
-  arithmetic, but the end-to-end "taps stay responsive" claim is untested.
+- **`UNAVAILABLE` rendering on real hardware.** Verified in the simulator only;
+  no device has actually dropped off the Zigbee mesh during testing.
