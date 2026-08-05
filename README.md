@@ -7,18 +7,23 @@ screen doubles as a status display.
 
 ```
 ┌────────────────────────────────────────────────┐
-│ ●WIFI ●HA                              2s ago │
+│ ●WIFI ●HA                                LIVE │
 ├────────────────────────────────────────────────┤
 │ TRADFRI BULB 1                     30%  2700K │
-│ [OFF][ 1%][30%][100%][2200K][4000K]           │
+│ [OFF][ 1%][30%][100%][2202K][4000K]           │
 │ TRADFRI BULB 2                            OFF │
-│ [OFF][ 1%][30%][100%][2200K][4000K]           │
+│ [OFF][ 1%][30%][100%][2202K][4000K]           │
 │ TRADFRI BULB 3                    100%  4000K │
-│ [OFF][ 1%][30%][100%][2200K][4000K]           │
+│ [OFF][ 1%][30%][100%][2202K][4000K]           │
 │ SENSIBO SKY AC          COOL  set 24  room 27 │
 │ [ OFF ][ AC  ][ DRY ][ T+  ][ T-  ]           │
 └────────────────────────────────────────────────┘
 ```
+
+All four devices refresh together every 1.5 s via a single templated request, so
+a change made from the HA app shows up here in about a second (measured
+1009–1036 ms). The right-hand readout stays `LIVE` while polling is healthy and
+only becomes an elapsed time once data actually goes stale.
 
 The currently-active state is filled in Home Assistant cyan. On a lit bulb a
 brightness button *and* a colour swatch can both be active — they are
@@ -95,11 +100,35 @@ Keep its constants in sync with `config.h` — that is the whole point of it.
 | White screen on boot | You have the dual-USB CYD variant — swap `ILI9341_2_DRIVER` for `ST7789_DRIVER` in `platformio.ini` |
 | Whites look cyan, oranges look green | Remove `-D TFT_RGB_ORDER=TFT_BGR` (your panel doesn't swap R/B) |
 | Colours inverted | Add `-D TFT_INVERSION_ON=1` |
-| Taps land on the wrong button | Read the `touch dbg: z=.. raw=..` serial lines and retune `TOUCH_X_MIN/MAX`, `TOUCH_Y_MIN/MAX` in `config.h` |
-| Taps never register | Lower `TOUCH_Z_MIN` (idle noise sits ~50-80, a firm tap is 150+) |
-| `HA` dot red | Token wrong/expired, or `HA_HOST` unreachable — check the `ha: GET ... -> 401` line on serial |
+| **Taps land on the wrong button** | Run the calibration below. Check `TOUCH_SWAP_XY` **first** — on this unit that flag, not the ranges, was the cause. Wrong swap collapses every tap into the left third of the screen, so only buttons 0-2 respond and the AC row is unreachable |
+| Taps never register at all | `TOUCH_Z_MIN` too high, or `TOUCH_REQUIRE_IRQ` is 1 on a board whose PENIRQ sticks high — set it to 0 and retest |
+| Phantom taps change lights by themselves | `TOUCH_Z_MIN` is inside the noise band. Read the `touch idle: rawZ=..` serial lines for the real noise floor and set the threshold well above it (this unit: noise ~50-130, real contact ~2100-2500) |
+| Backlight won't dim | `BL_DUTY` only works if LEDC is configured **after** `screenBegin()` — `TFT_eSPI::init()` reclaims `TFT_BL` as a plain output |
+| `HA` dot red | Token wrong/expired, or `HA_HOST` unreachable — check for `ha: POST /api/template -> 401` on serial |
 | Colour swatches show `n/a` | The bulb doesn't report `color_temp` support — it's a plain dimmable-white TRADFRI, not white-spectrum |
+| A row reads `UNAVAILABLE` | HA itself can't reach that device (Zigbee dropout). Buttons grey out deliberately — there is no current state to highlight |
 | T+/T- do nothing | Expected until the first successful AC poll lands; they're relative to the current setpoint |
+
+## Touch calibration
+
+The touch mapping is measured, not guessed. To redo it:
+
+```sh
+pio run -e calib -t upload     # then tap the 4 crosshairs on screen
+pio device monitor             # reads back a ready-to-paste TOUCH_* block
+```
+
+Tap the centre of each crosshair (top-left, top-right, bottom-right,
+bottom-left). The firmware fits the four points, prints the constants, and then
+shows a **verify** screen drawing the real button grid — tap boxes and confirm
+the dot lands inside before committing to the values. Paste the printed block
+into `include/config.h`, then reflash the normal firmware with `pio run -t upload`.
+
+> `env:calib` has **no Wi-Fi and no Home Assistant** — it cannot touch your
+> lights, so tap freely. But the device is inert as a controller until you flash
+> `env:cyd` again.
+
+Current values were verified across all 23 buttons with sub-pixel residuals.
 
 ## Roadmap
 

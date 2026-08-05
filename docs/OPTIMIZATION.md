@@ -1,5 +1,11 @@
 # cyd-ha — audit findings and optimization plan
 
+> **Status: applied 2026-08-05.** P0–P4 are implemented, flashed and verified on
+> hardware; see §5 for what was measured and what remains open. The findings
+> below are kept as written for the record — they explain *why* the code looks
+> the way it does, and several are the reasoning behind comments in the source.
+> P5 (WebSocket) is deliberately **not** done.
+
 Audit date: 2026-08-05. Firmware state: flashed and working on hardware
 (`/dev/cu.usbserial-110`), touch calibrated, 18 real taps with 0 HA errors.
 
@@ -242,3 +248,59 @@ freshness improvement for a fraction of the work, so this is worth doing only if
 3. **P1** — the measured 4×/56× win, and it removes the heap risk.
 4. **P4 heap logging + soak** — closes the unverified list.
 5. **P2**, then remaining **P3** docs, then reassess **P5**.
+
+---
+
+## 5. Outcome
+
+`git init` was done **first**, not second, so every phase below has a rollback
+point. Branch: `apply-optimization-plan`, off `main` at the baseline commit.
+
+### Applied
+
+| Item | Result |
+|---|---|
+| **B1** blocking-I/O freeze | `HTTP_CONNECT_MS` 1200 / `HTTP_READ_MS` 1500 + `haBreakerOpen()`. Worst-case tap freeze 8 s → ~1.2 s, and repeat taps against a dead HA now cost nothing |
+| **B2** dead `BL_DUTY` | LEDC setup moved after `screenBegin()` |
+| **B3/B4** stale comment, dead call | `readTouch()` axis mapping documented correctly; `ts.setCalibration()` removed |
+| **B5** `haOk` stuck green | cleared in `updateNetState()` when Wi-Fi drops |
+| **B6** unavailable → false OFF | `DeviceState::avail`; row renders `UNAVAILABLE` in red, all buttons greyed. Verified in the simulator |
+| **B8** simulator drift | constants synced, swatch captions derived from `KELVIN_*`, `LIVE` text, plus an unavailable toggle so the new state is checkable |
+| **B9** docs | `README` calibration section + corrected troubleshooting; `CLAUDE.md` covers the swap finding, the template constraints, the backlight trap and the `avail` rule |
+| **B10** no repo | `git init`, `*.log` ignored, token confirmed unstaged by scanning every staged file for it |
+| **P1** one templated request | 64.0 ms/2403 B → **14.2 ms/50 B**. Poll path is now allocation-free (no ArduinoJson) |
+| **P2** per-button dirty tracking | buttons compared by visual state; a brightness change repaints 2 buttons, not 6 |
+| **P4** heap logging | `logHeap()` every 30 s |
+
+### Measured after the change
+
+- **External-change latency: 1009–1036 ms** (was a 6000 ms worst case). Verified by
+  driving `light.bulb_1` to 1% / 100% / 30% over the API and timing the device's
+  own log line.
+- **Heap: not yet proven flat.** Over 62 s it looked stable (244016 → 244044 →
+  243772), but a later sample at `up=422s` read 243608 — roughly −400 B across
+  7 minutes. That is either settling or a slow leak of ~60 B/min, and 62 s of
+  data cannot tell the two apart. `getMaxAllocHeap` is steady at 110580, which
+  argues against fragmentation. A 25-minute soak is running; see §6.
+  The earlier "flat" reading was over too short a window to claim.
+- **Template parse correct** end to end: `on,3,2202` / `on,254,2202` / `on,76,2202`.
+- Builds clean, both `env:cyd` and `env:calib`. RAM 15.0%, flash 31.1%.
+
+### Deliberately not done
+
+- **P5 WebSocket.** P1 already brought external-change latency to ~1 s. Revisit
+  only if that proves laggy.
+- **P4 night dimming / daily restart / boot-gesture calibration.** Unblocked now
+  that B2 is fixed, but they add behaviour rather than fixing anything.
+- **B7** the `xptRead(0x00)` garbage sample still feeds `avg2()`. Latent
+  fragility only — verified accurate to <0.6 px — and touching the verified-good
+  touch path for cosmetics is a poor trade.
+
+### Still unverified
+
+- **Long soak.** Heap is flat over 62 s, not over hours.
+- **Stale dimming** at `DEVICE_STALE_MS`.
+- **Rollback path** on a failed service call.
+- **`T+`/`T-`** stepping by exactly one step and clamping at 18/31.
+- **Breaker behaviour** with HA genuinely offline — the timeout reduction is
+  arithmetic, but the end-to-end "taps stay responsive" claim is untested.

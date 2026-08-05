@@ -13,6 +13,13 @@ static WiFiClient net;
 static void markResult(bool ok) {
   S.haOk = ok;
   if (ok) S.haOkMs = millis();
+  else    S.haFailMs = millis();
+}
+
+// True while the circuit breaker is open — the last call failed recently, so
+// skip the network entirely rather than making the caller pay another timeout.
+bool haBreakerOpen() {
+  return !S.haOk && S.haFailMs && (millis() - S.haFailMs < HA_BREAKER_MS);
 }
 
 // Opens `http` against HA and applies auth. Caller must http.end().
@@ -21,8 +28,8 @@ static bool haBegin(HTTPClient& http, const char* path) {
   char url[192];
   snprintf(url, sizeof(url), "http://%s:%d%s", HA_HOST, HA_PORT, path);
   if (!http.begin(net, url)) return false;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_MS);
+  http.setConnectTimeout(HTTP_CONNECT_MS);
   http.useHTTP10(true);
   http.addHeader("Authorization", "Bearer " HA_TOKEN);
   return true;
@@ -48,10 +55,142 @@ static bool haPostService(const char* domain, const char* service, const char* b
   return ok;
 }
 
-// ── state polling ────────────────────────────────────────
+// HA's sentinel states for a device it currently cannot reach. Declared here
+// because both the bulk and single-entity parse paths below need it.
+static inline bool isUnavail(const char* st) {
+  return strcmp(st, "unavailable") == 0 || strcmp(st, "unknown") == 0;
+}
+
+// ── bulk polling via the template API ────────────────────
+
+// Per-entity fragments of the Jinja template. Deliberately written WITHOUT
+// {%- ... -%} statement tags: those contain '%', which snprintf would consume
+// as a format specifier. Loop-free means the entity id repeats, costing a few
+// hundred bytes of request — irrelevant next to a 4x latency win.
+//
+// Climate temperatures are emitted in TENTHS so a 0.5 target_temp_step or a
+// 24.5 setpoint survives; |int would truncate them.
+#define TPL_LIGHT                                                    \
+  "{{ states('%s') }},{{ state_attr('%s','brightness')|int(0) }},"    \
+  "{{ state_attr('%s','color_temp_kelvin')|int(0) }};"
+
+#define TPL_CLIMATE                                                             \
+  "{{ states('%s') }}"                                                          \
+  ",{{ (state_attr('%s','temperature')|float(0)*10)|round(0)|int }}"            \
+  ",{{ (state_attr('%s','current_temperature')|float(0)*10)|round(0)|int }}"    \
+  ",{{ (state_attr('%s','min_temp')|float(0)*10)|round(0)|int }}"               \
+  ",{{ (state_attr('%s','max_temp')|float(0)*10)|round(0)|int }}"               \
+  ",{{ (state_attr('%s','target_temp_step')|float(1)*10)|round(0)|int }}"
+
+// Applies one "state,brightness,kelvin" group to a light.
+static void applyLight(DeviceState& d, const char* st, int bri, int kelvin) {
+  d.avail = !isUnavail(st);
+  d.on    = (strcmp(st, "on") == 0);
+  // A bulb that is off reports 0 for both; keep the last known values so
+  // turning it back on still shows a sensible highlight.
+  if (bri > 0)    d.pct    = (int)lroundf(bri * 100.0f / 255.0f);
+  if (kelvin > 0) d.kelvin = kelvin;
+}
+
+bool haPollAll() {
+  // One buffer holds the whole request body. 879-char template measured for
+  // these entity ids; 1600 leaves ample room for longer names.
+  static char body[1600];
+  int n = snprintf(body, sizeof(body),
+                   "{\"template\":\"" TPL_LIGHT TPL_LIGHT TPL_LIGHT TPL_CLIMATE "\"}",
+                   ENT_BULB1, ENT_BULB1, ENT_BULB1,
+                   ENT_BULB2, ENT_BULB2, ENT_BULB2,
+                   ENT_BULB3, ENT_BULB3, ENT_BULB3,
+                   ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC);
+  if (n <= 0 || n >= (int)sizeof(body)) {
+    Serial.printf("ha: template body overflow (%d)\n", n);
+    markResult(false);
+    return false;
+  }
+
+  HTTPClient http;
+  if (!haBegin(http, "/api/template")) { markResult(false); return false; }
+  http.addHeader("Content-Type", "application/json");
+
+  int code = http.POST((uint8_t*)body, n);
+  if (code != 200) {
+    Serial.printf("ha: POST /api/template -> %d\n", code);
+    http.end();
+    markResult(false);
+    return false;
+  }
+  String resp = http.getString();   // ~50 bytes
+  http.end();
+
+  // "off,0,0;off,0,0;on,76,2202;cool,290,237,180,310,10"
+  char buf[192];
+  snprintf(buf, sizeof(buf), "%s", resp.c_str());
+
+  // Log only on change: silent in steady state, but every externally-made
+  // change (phone app, automation) shows up with a timestamp — which is how
+  // the poll latency and the parse get verified without watching the screen.
+  static char prev[192] = "";
+  if (strcmp(buf, prev) != 0) {
+    Serial.printf("ha state: %s\n", buf);
+    snprintf(prev, sizeof(prev), "%s", buf);
+  }
+
+  char* saveptr = nullptr;
+  char* tok = strtok_r(buf, ";", &saveptr);
+  int   idx = 0;
+  bool  okAll = true;
+
+  while (tok && idx < NUM_DEVICES) {
+    DeviceState& d = S.dev[idx];
+    char st[20]  = "";
+    bool thisOk  = false;
+
+    if (d.kind == DEV_CLIMATE) {
+      int tg = 0, rm = 0, mn = 0, mx = 0, sp = 0;
+      if (sscanf(tok, "%19[^,],%d,%d,%d,%d,%d", st, &tg, &rm, &mn, &mx, &sp) == 6) {
+        d.avail = !isUnavail(st);
+        strncpy(d.mode, st, sizeof(d.mode) - 1);
+        d.mode[sizeof(d.mode) - 1] = '\0';
+        d.target = tg / 10.0f;
+        d.room   = rm / 10.0f;
+        // 0 means the attribute was absent; keep the existing fallback.
+        if (mn) d.tMin  = mn / 10.0f;
+        if (mx) d.tMax  = mx / 10.0f;
+        if (sp) d.tStep = sp / 10.0f;
+        thisOk = true;
+      }
+    } else {
+      int bri = 0, k = 0;
+      if (sscanf(tok, "%19[^,],%d,%d", st, &bri, &k) == 3) {
+        applyLight(d, st, bri, k);
+        thisOk = true;
+      }
+    }
+
+    // Per-device, not a shared flag: one malformed group must not stop the
+    // other three from being marked fresh.
+    if (thisOk) { d.known = true; d.okMs = millis(); }
+    else        { okAll = false; }
+
+    tok = strtok_r(nullptr, ";", &saveptr);
+    idx++;
+  }
+
+  if (idx != NUM_DEVICES || !okAll) {
+    Serial.printf("ha: template parse failed (%d/%d fields): %s\n",
+                  idx, NUM_DEVICES, resp.c_str());
+    markResult(false);
+    return false;
+  }
+  markResult(true);
+  return true;
+}
+
+// ── single-entity polling (diagnostics) ──────────────────
 
 static void parseLight(DeviceState& d, JsonDocument& doc) {
   const char* st = doc["state"] | "";
+  d.avail = !isUnavail(st);
   d.on = (strcmp(st, "on") == 0);
 
   JsonObject at = doc["attributes"];
@@ -83,6 +222,7 @@ static void parseLight(DeviceState& d, JsonDocument& doc) {
 static void parseClimate(DeviceState& d, JsonDocument& doc) {
   // For a climate entity the top-level state IS the hvac mode.
   const char* st = doc["state"] | "";
+  d.avail = !isUnavail(st);
   strncpy(d.mode, st, sizeof(d.mode) - 1);
   d.mode[sizeof(d.mode) - 1] = '\0';
 
