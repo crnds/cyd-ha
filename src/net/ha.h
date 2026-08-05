@@ -15,6 +15,11 @@
 // GET /api/states/<entity_id> -> fills the light or climate fields of `d`.
 bool haPollDevice(DeviceState& d);
 
+// True while the last call failed recently (see HA_BREAKER_MS). Callers that
+// run on a tap should skip the network and fail fast instead of paying another
+// blocking timeout with the UI frozen.
+bool haBreakerOpen();
+
 // light.* service calls
 bool haLightOff(DeviceState& d);
 bool haLightBrightness(DeviceState& d, int pct);

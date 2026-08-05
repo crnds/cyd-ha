@@ -13,7 +13,20 @@
 // refreshes every ~4 * HA_POLL_MS = 6s. That is the worst-case latency for a
 // change made elsewhere (phone app, automation) showing up here.
 #define HA_POLL_MS         1500UL
-#define HTTP_TIMEOUT_MS    4000      // local plain HTTP — no TLS handshake to wait on
+
+// Every HA call is blocking and runs inside loop(), so a timeout is also a
+// UI-freeze budget: while one is outstanding, touch and rendering stop dead.
+// Measured LAN round trip is 16-64 ms, so these are ~20x headroom. The old
+// single 4000 ms value applied to BOTH connect and read, meaning an
+// unreachable HA froze the screen for up to 8 s per tap.
+#define HTTP_CONNECT_MS    1200
+#define HTTP_READ_MS       1500
+
+// Circuit breaker: after a failed call, don't let further taps each pay another
+// timeout. Fail fast (flash the row red) until this window expires, then allow
+// one probe through.
+#define HA_BREAKER_MS      2500UL
+
 #define RETRY_BASE_MS      1000UL
 #define RETRY_MAX_MS       60000UL
 

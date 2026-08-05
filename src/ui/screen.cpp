@@ -25,23 +25,31 @@ static const char* BULB_LABEL[BULB_BTNS]     = {"OFF", "1%", "30%", "100%", null
 static const char* BULB_LABEL_ALT[BULB_BTNS] = {"OFF", "1",  "30",  "100",  nullptr, nullptr};
 static const char* AC_LABEL[AC_BTNS]         = {"OFF", "AC", "DRY", "T+", "T-"};
 
+// Swatch captions are derived from the constants they actually send, so the
+// label can never drift from the value (it already had: the label read "2200K"
+// while KELVIN_WARM was corrected to the bulbs' real 2202 K limit).
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x)  STRINGIFY_(x)
+#define KLABEL_WARM   STRINGIFY(KELVIN_WARM) "K"
+#define KLABEL_COOL   STRINGIFY(KELVIN_COOL) "K"
+
 // ── dirty-region snapshots ───────────────────────────────
-// memcmp'd against freshly built values; a row only repaints when something it
-// actually shows has changed. NAN bit patterns are stable, so memcmp is safe
-// here even though NAN != NAN numerically.
+// A row is tracked as two independent regions: the name/state text line, and
+// each button separately. Previously any single change repainted the whole row
+// including all 6 buttons; now a brightness change repaints only the 2 buttons
+// whose appearance actually differs.
+//
+// Buttons are compared by their *visual* state rather than by the underlying
+// values, which is both cheaper and exactly right — two different brightness
+// values that map to the same highlight need no repaint.
+enum BtnVis : uint8_t { BV_INACTIVE = 0, BV_ACTIVE, BV_PRESSED, BV_DISABLED };
+
 struct RowSnap {
-  bool     valid;
-  bool     on;
-  int      pct;
-  int      kelvin;
-  bool     supportsCT;
-  char     mode[12];
-  float    target;
-  float    room;
-  bool     stale;
-  bool     err;
-  uint8_t  activeMask;
-  int8_t   pressBtn;
+  bool    valid;
+  char    stateStr[48];          // last rendered state text
+  bool    stale;
+  bool    err;
+  uint8_t btnVis[BULB_BTNS];     // BULB_BTNS >= AC_BTNS, so this covers both
 };
 static RowSnap snap[NUM_DEVICES];
 
@@ -72,6 +80,10 @@ static void btnRect(uint8_t dev, uint8_t b,
 // ── active-state derivation ──────────────────────────────
 
 static bool btnActive(const DeviceState& d, uint8_t b) {
+  // An unreachable device has no current state to highlight. Lighting OFF here
+  // would claim the bulb is off when we simply cannot see it.
+  if (!d.avail) return false;
+
   if (d.kind == DEV_CLIMATE) {
     switch (b) {
       case 0:  return strcmp(d.mode, "off") == 0;
@@ -94,13 +106,6 @@ static bool btnActive(const DeviceState& d, uint8_t b) {
   }
 }
 
-static uint8_t activeMask(const DeviceState& d) {
-  uint8_t m = 0;
-  for (uint8_t b = 0; b < btnCount(d); b++)
-    if (btnActive(d, b)) m |= (1u << b);
-  return m;
-}
-
 // ── drawing helpers ──────────────────────────────────────
 
 // Button labels must never clip, and Font 2's width varies per glyph, so try
@@ -121,9 +126,11 @@ static void drawFittedLabel(const char* primary, const char* fallback,
 
 static void drawTextButton(int16_t x, int16_t y, int16_t w, int16_t h,
                            const char* label, const char* labelAlt,
-                           bool active, bool pressed) {
+                           bool active, bool pressed, bool disabled) {
   uint16_t fill, edge, fg;
-  if (pressed) {
+  if (disabled) {
+    fill = C_BG;    edge = C_BORDER; fg = C_MUTED;
+  } else if (pressed) {
     // brief bright inversion so the tap is felt before HA has answered
     fill = C_TEXT;  edge = C_TEXT;  fg = C_BG;
   } else if (active) {
@@ -178,6 +185,8 @@ static const char* prettyMode(const char* m) {
 
 static void stateText(const DeviceState& d, char* out, size_t n) {
   if (!d.known) { snprintf(out, n, "--"); return; }
+  // Say so explicitly rather than letting an unreachable device read as OFF.
+  if (!d.avail) { snprintf(out, n, "UNAVAILABLE"); return; }
 
   if (d.kind == DEV_CLIMATE) {
     char t[16] = "--";
@@ -210,60 +219,65 @@ static void drawRow(uint8_t dev, bool force) {
   int8_t press = (S.pressDev == (int8_t)dev && S.pressMs &&
                   now - S.pressMs < PRESS_FLASH_MS) ? S.pressBtn : -1;
 
-  RowSnap cur;
-  memset(&cur, 0, sizeof(cur));          // zero padding so memcmp is meaningful
-  cur.valid      = true;
-  cur.on         = d.on;
-  cur.pct        = d.pct;
-  cur.kelvin     = d.kelvin;
-  cur.supportsCT = d.supportsCT;
-  memcpy(cur.mode, d.mode, sizeof(cur.mode));
-  cur.target     = d.target;
-  cur.room       = d.room;
-  cur.stale      = stale;
-  cur.err        = err;
-  cur.activeMask = activeMask(d);
-  cur.pressBtn   = press;
+  RowSnap&      sn    = snap[dev];
+  const bool    first = force || !sn.valid;
+  const int16_t top   = rowTop(dev);
 
-  if (!force && memcmp(&cur, &snap[dev], sizeof(cur)) == 0) return;
-  snap[dev] = cur;
-
-  const int16_t top = rowTop(dev);
-
-  // ── top line: name (left) + state (right) ──
-  // GFX/GLCD fonts don't paint their own background, so clear first.
-  tft.fillRect(0, top + ROW_LABEL_DY, SCR_W, 10, C_BG);
-  tft.setTextFont(1);
-  tft.setTextDatum(TL_DATUM);
-  tft.setTextColor(stale ? C_DIM : C_TEXT);
-  tft.drawString(d.name, BTN_X0, top + ROW_LABEL_DY);
-
+  // ── region 1: name (left) + state (right) ──
   char st[48];
   stateText(d, st, sizeof(st));
-  tft.setTextDatum(TR_DATUM);
-  tft.setTextColor(err ? C_RED : (stale ? C_DIM : C_TEXT2));
-  tft.drawString(st, SCR_W - BTN_X0, top + ROW_LABEL_DY);
+  if (first || stale != sn.stale || err != sn.err || strcmp(st, sn.stateStr) != 0) {
+    // GFX/GLCD fonts don't paint their own background, so clear first. This
+    // rect spans y..y+10 only, well clear of the button strip at top+ROW_BTN_DY.
+    tft.fillRect(0, top + ROW_LABEL_DY, SCR_W, 10, C_BG);
+    tft.setTextFont(1);
+    tft.setTextDatum(TL_DATUM);
+    tft.setTextColor(stale ? C_DIM : C_TEXT);
+    tft.drawString(d.name, BTN_X0, top + ROW_LABEL_DY);
 
-  // ── button strip ──
-  for (uint8_t b = 0; b < btnCount(d); b++) {
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(err || !d.avail ? C_RED : (stale ? C_DIM : C_TEXT2));
+    tft.drawString(st, SCR_W - BTN_X0, top + ROW_LABEL_DY);
+
+    snprintf(sn.stateStr, sizeof(sn.stateStr), "%s", st);
+    sn.stale = stale;
+    sn.err   = err;
+  }
+
+  // ── region 2: each button, independently dirty ──
+  const uint8_t n = btnCount(d);
+  for (uint8_t b = 0; b < n; b++) {
+    bool isSwatch = (d.kind == DEV_LIGHT && (b == 4 || b == 5));
+    bool disabled = !d.avail || (isSwatch && !d.supportsCT);
+
+    uint8_t vis = BV_INACTIVE;
+    if (disabled)                 vis = BV_DISABLED;
+    else if (press == (int8_t)b)  vis = BV_PRESSED;
+    else if (btnActive(d, b))     vis = BV_ACTIVE;
+
+    if (!first && vis == sn.btnVis[b]) continue;
+    sn.btnVis[b] = vis;
+
     int16_t x, y, w, h;
     btnRect(dev, b, x, y, w, h);
-    bool active  = (cur.activeMask >> b) & 1u;
-    bool pressed = (press == (int8_t)b);
+    bool active  = (vis == BV_ACTIVE);
+    bool pressed = (vis == BV_PRESSED);
 
     if (d.kind == DEV_CLIMATE) {
-      drawTextButton(x, y, w, h, AC_LABEL[b], nullptr, active, pressed);
+      drawTextButton(x, y, w, h, AC_LABEL[b], nullptr, active, pressed, disabled);
     } else if (b == 4) {
-      drawSwatch(x, y, w, h, C_WARM, "2200K", active, pressed, !d.supportsCT);
+      drawSwatch(x, y, w, h, C_WARM, KLABEL_WARM, active, pressed, disabled);
     } else if (b == 5) {
-      drawSwatch(x, y, w, h, C_COOL, "4000K", active, pressed, !d.supportsCT);
+      drawSwatch(x, y, w, h, C_COOL, KLABEL_COOL, active, pressed, disabled);
     } else {
-      drawTextButton(x, y, w, h, BULB_LABEL[b], BULB_LABEL_ALT[b], active, pressed);
+      drawTextButton(x, y, w, h, BULB_LABEL[b], BULB_LABEL_ALT[b],
+                     active, pressed, disabled);
     }
   }
 
-  // separator above every row but the first
-  if (dev > 0) tft.drawFastHLine(0, top - 2, SCR_W, C_BORDER);
+  // separator above every row but the first; nothing else ever clears it
+  if (first && dev > 0) tft.drawFastHLine(0, top - 2, SCR_W, C_BORDER);
+  sn.valid = true;
 }
 
 // ── status bar ───────────────────────────────────────────

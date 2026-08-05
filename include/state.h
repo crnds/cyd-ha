@@ -15,6 +15,11 @@ struct DeviceState {
   bool     known  = false;   // has any poll ever succeeded? gates T+/T-
   uint32_t okMs   = 0;       // millis() of last successful poll; 0 = never
 
+  // HA reports "unavailable"/"unknown" for a device it can't reach. Without
+  // this an unreachable bulb collapsed to on==false and rendered as a plain
+  // OFF — indistinguishable from a healthy bulb that is genuinely off.
+  bool     avail  = true;
+
   // ── light.* ──
   bool on         = false;
   int  pct        = -1;      // brightness 0-100, -1 = unknown
@@ -42,6 +47,7 @@ struct AppState {
   uint8_t  netState = 0;     // 0 connecting, 1 live, 2 reconnecting
   bool     haOk     = false; // last HA request succeeded
   uint32_t haOkMs   = 0;     // millis() of last successful HA request
+  uint32_t haFailMs = 0;     // millis() of last failed HA request (breaker)
 
   // Button being visually held down (inverted fill) for PRESS_FLASH_MS.
   int8_t   pressDev = -1;

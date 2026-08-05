@@ -13,6 +13,13 @@ static WiFiClient net;
 static void markResult(bool ok) {
   S.haOk = ok;
   if (ok) S.haOkMs = millis();
+  else    S.haFailMs = millis();
+}
+
+// True while the circuit breaker is open — the last call failed recently, so
+// skip the network entirely rather than making the caller pay another timeout.
+bool haBreakerOpen() {
+  return !S.haOk && S.haFailMs && (millis() - S.haFailMs < HA_BREAKER_MS);
 }
 
 // Opens `http` against HA and applies auth. Caller must http.end().
@@ -21,8 +28,8 @@ static bool haBegin(HTTPClient& http, const char* path) {
   char url[192];
   snprintf(url, sizeof(url), "http://%s:%d%s", HA_HOST, HA_PORT, path);
   if (!http.begin(net, url)) return false;
-  http.setTimeout(HTTP_TIMEOUT_MS);
-  http.setConnectTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_MS);
+  http.setConnectTimeout(HTTP_CONNECT_MS);
   http.useHTTP10(true);
   http.addHeader("Authorization", "Bearer " HA_TOKEN);
   return true;
@@ -50,8 +57,14 @@ static bool haPostService(const char* domain, const char* service, const char* b
 
 // ── state polling ────────────────────────────────────────
 
+// HA's sentinel states for a device it currently cannot reach.
+static inline bool isUnavail(const char* st) {
+  return strcmp(st, "unavailable") == 0 || strcmp(st, "unknown") == 0;
+}
+
 static void parseLight(DeviceState& d, JsonDocument& doc) {
   const char* st = doc["state"] | "";
+  d.avail = !isUnavail(st);
   d.on = (strcmp(st, "on") == 0);
 
   JsonObject at = doc["attributes"];
@@ -83,6 +96,7 @@ static void parseLight(DeviceState& d, JsonDocument& doc) {
 static void parseClimate(DeviceState& d, JsonDocument& doc) {
   // For a climate entity the top-level state IS the hvac mode.
   const char* st = doc["state"] | "";
+  d.avail = !isUnavail(st);
   strncpy(d.mode, st, sizeof(d.mode) - 1);
   d.mode[sizeof(d.mode) - 1] = '\0';
 
