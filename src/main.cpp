@@ -372,7 +372,7 @@ static void updateNetState() {
 }
 
 static void setupWifi() {
-  screenSplash("Connecting to Wi-Fi");
+  screenSplash();          // logo only
 
   if (strlen(WIFI_SSID) > 0) {
     WiFi.mode(WIFI_STA);

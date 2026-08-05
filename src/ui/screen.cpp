@@ -395,10 +395,11 @@ static void drawLogo(int16_t ox, int16_t oy) {
 void screenSplash(const char* line1, const char* line2) {
   tft.fillScreen(C_BG);
 
-  // Logo as the hero, captions beneath. The whole group is optically centred:
-  // logo (96) + gap + two text lines lands the block around the middle.
+  // With no caption the logo IS the whole composition, so centre it exactly.
+  // With captions it sits higher so the group as a whole reads as centred —
+  // leaving it at the caption offset would look bottom-heavy and off-centre.
   const int16_t lx = (SCR_W - LOGO_HA_W) / 2;
-  const int16_t ly = 40;
+  const int16_t ly = line1 ? 40 : (SCR_H - LOGO_HA_H) / 2;
   drawLogo(lx, ly);
 
   tft.setTextDatum(MC_DATUM);
