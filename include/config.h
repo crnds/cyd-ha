@@ -20,7 +20,13 @@
 // single 4000 ms value applied to BOTH connect and read, meaning an
 // unreachable HA froze the screen for up to 8 s per tap.
 #define HTTP_CONNECT_MS    1200
+// Poll reads are a local template render — measured 14 ms, so this is huge.
 #define HTTP_READ_MS       1500
+// Service calls are a different workload: light.* is local Zigbee and fast, but
+// climate.* goes out to the Sensibo cloud. Measured REAL changes at 1135-1643 ms
+// (a no-op write short-circuits in 24 ms, which is what misled the first tuning
+// pass into 1500 and made every genuine T+/T- report a read timeout).
+#define HTTP_READ_SVC_MS   2500
 
 // Circuit breaker: after a failed call, don't let further taps each pay another
 // timeout. Fail fast (flash the row red) until this window expires, then allow

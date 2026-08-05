@@ -24,11 +24,11 @@ bool haBreakerOpen() {
 
 // Opens `http` against HA and applies auth. Caller must http.end().
 // useHTTP10 keeps responses unchunked so they can be stream-parsed.
-static bool haBegin(HTTPClient& http, const char* path) {
+static bool haBegin(HTTPClient& http, const char* path, int readMs = HTTP_READ_MS) {
   char url[192];
   snprintf(url, sizeof(url), "http://%s:%d%s", HA_HOST, HA_PORT, path);
   if (!http.begin(net, url)) return false;
-  http.setTimeout(HTTP_READ_MS);
+  http.setTimeout(readMs);
   http.setConnectTimeout(HTTP_CONNECT_MS);
   http.useHTTP10(true);
   http.addHeader("Authorization", "Bearer " HA_TOKEN);
@@ -43,22 +43,40 @@ static bool haPostService(const char* domain, const char* service, const char* b
   snprintf(path, sizeof(path), "/api/services/%s/%s", domain, service);
 
   HTTPClient http;
-  if (!haBegin(http, path)) { markResult(false); return false; }
+  if (!haBegin(http, path, HTTP_READ_SVC_MS)) { markResult(false); return false; }
   http.addHeader("Content-Type", "application/json");
 
   int code = http.POST((uint8_t*)body, strlen(body));
   http.end();
 
-  bool ok = (code >= 200 && code < 300);
-  if (!ok) Serial.printf("ha: POST %s/%s -> %d  %s\n", domain, service, code, body);
-  markResult(ok);
-  return ok;
+  if (code >= 200 && code < 300) { markResult(true); return true; }
+
+  // A read timeout is NOT a failed command. We connected and sent the request;
+  // we just gave up waiting for the reply. HA has almost certainly executed it —
+  // observed repeatedly with climate.* calls, which wait on the Sensibo cloud.
+  // Rolling back the optimistic state here would show the OLD setpoint for a
+  // change that did in fact happen. Treat it as delivered and let the reconcile
+  // refresh establish the truth a moment later.
+  if (code == HTTPC_ERROR_READ_TIMEOUT) {
+    Serial.printf("ha: POST %s/%s read-timeout (assuming delivered)  %s\n",
+                  domain, service, body);
+    markResult(true);
+    return true;
+  }
+
+  Serial.printf("ha: POST %s/%s -> %d  %s\n", domain, service, code, body);
+  markResult(false);
+  return false;
 }
 
 // HA's sentinel states for a device it currently cannot reach. Declared here
 // because both the bulk and single-entity parse paths below need it.
 static inline bool isUnavail(const char* st) {
   return strcmp(st, "unavailable") == 0 || strcmp(st, "unknown") == 0;
+}
+
+static inline bool inRange(float v, float lo, float hi) {
+  return v >= lo && v <= hi;
 }
 
 // ── bulk polling via the template API ────────────────────
@@ -151,12 +169,32 @@ bool haPollAll() {
         d.avail = !isUnavail(st);
         strncpy(d.mode, st, sizeof(d.mode) - 1);
         d.mode[sizeof(d.mode) - 1] = '\0';
-        d.target = tg / 10.0f;
-        d.room   = rm / 10.0f;
-        // 0 means the attribute was absent; keep the existing fallback.
-        if (mn) d.tMin  = mn / 10.0f;
-        if (mx) d.tMax  = mx / 10.0f;
-        if (sp) d.tStep = sp / 10.0f;
+
+        // Every climate field is range-checked, and a rejected field keeps its
+        // last good value. Two reasons this is necessary:
+        //  1. The template's |float(0) default conflates "attribute missing"
+        //     with "value is zero"; the old ArduinoJson isNull() check could
+        //     tell them apart, and this flattened that distinction.
+        //  2. The Sensibo reports nonsense transiently during an hvac_mode
+        //     change. An actual observed sample was "cool,0,238,0,10,10" —
+        //     target 0, min 0, max 1.0. Taking max=1.0 at face value would make
+        //     T+/T- clamp the setpoint to one degree.
+        float ftg = tg / 10.0f, frm = rm / 10.0f;
+        float fmn = mn / 10.0f, fmx = mx / 10.0f, fsp = sp / 10.0f;
+
+        if (inRange(ftg, 5.0f, 40.0f))   d.target = ftg;
+        if (inRange(frm, -10.0f, 60.0f)) d.room   = frm;
+        // min/max are only taken as a coherent pair spanning a usable band
+        if (inRange(fmn, 5.0f, 30.0f) && inRange(fmx, 10.0f, 40.0f) &&
+            (fmx - fmn) >= 5.0f) {
+          d.tMin = fmn;
+          d.tMax = fmx;
+        } else if (mn || mx) {
+          Serial.printf("ha: rejected implausible climate limits %.1f/%.1f "
+                        "(keeping %.1f/%.1f)\n", fmn, fmx, d.tMin, d.tMax);
+        }
+        if (inRange(fsp, 0.1f, 5.0f)) d.tStep = fsp;
+
         thisOk = true;
       }
     } else {

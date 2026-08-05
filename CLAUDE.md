@@ -122,11 +122,35 @@ Service calls POST to `/api/services/<domain>/<service>`; their response bodies
 are ignored because the reconcile refresh re-reads authoritative state anyway.
 
 **Every HA call blocks `loop()`**, so a timeout is also a UI-freeze budget —
-touch and rendering stop while one is outstanding. Hence `HTTP_CONNECT_MS` 1200 /
-`HTTP_READ_MS` 1500 (~20× the measured 16-64 ms LAN round trip) and
-`haBreakerOpen()`, which makes taps fail fast rather than each paying another
+touch and rendering stop while one is outstanding. Hence `HTTP_CONNECT_MS` 1200
+and `haBreakerOpen()`, which makes taps fail fast rather than each paying another
 timeout. A single 4000 ms timeout on both phases once froze the screen for up to
 8 s per tap.
+
+**Polls and service calls are different workloads — don't unify their timeouts.**
+`HTTP_READ_MS` 1500 covers a poll (a local template render, measured 14 ms).
+Service calls get `HTTP_READ_SVC_MS` 2500, because `climate.*` goes out to the
+Sensibo **cloud**: measured **1135–1643 ms** for a real change. The trap is that a
+*no-op* write short-circuits in 24 ms, so benchmarking `set_temperature` with the
+value it already has reports 24 ms and hides the problem entirely. That mistake
+shipped a 1500 ms read timeout, and every genuine `T+`/`T-` tap then reported a
+read timeout.
+
+**A read timeout is not a failed command.** `haPostService()` treats
+`HTTPC_ERROR_READ_TIMEOUT` as *delivered* and returns true. We connected and sent
+the request; we only gave up waiting for the reply, and HA has almost certainly
+executed it. Rolling back the optimistic state there would display the old
+setpoint for a change that really happened. Only connect failures and HTTP error
+codes roll back.
+
+**Range-check every climate attribute.** The template's `|float(0)` default
+conflates "attribute missing" with "value is zero" — a distinction the old
+ArduinoJson `isNull()` check could make. Worse, the Sensibo emits nonsense
+transiently during an `hvac_mode` change; an observed sample was
+`cool,0,238,0,10,10` (target 0, min 0, **max 1.0**). Taking that at face value set
+`tMax` to 1.0, which would make `T+`/`T-` clamp the setpoint to one degree.
+`min`/`max` are therefore only accepted as a coherent pair spanning ≥5 °C, and a
+rejected field keeps its last good value.
 
 **Optimistic UI** (`doAction()` in `main.cpp`) is the load-bearing UX decision.
 On tap it (1) applies the expected state locally and calls `screenRender()`,
