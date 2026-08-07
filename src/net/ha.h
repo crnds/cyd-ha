@@ -39,6 +39,18 @@ bool haLightOff(DeviceState& d);
 bool haLightBrightness(DeviceState& d, int pct);
 bool haLightKelvin(DeviceState& d, int kelvin);
 
+// Group light.* calls for the Scenes page. `mask` is a bitmask over S.dev[],
+// bit i = device i.
+//
+// light.turn_on / turn_off accept a LIST for entity_id, and that is the whole
+// point of these: three separate calls would be three sequential
+// HTTP_READ_SVC_MS budgets — up to 7.5 s of frozen loop() for one scene tap —
+// and the bulbs would visibly step on one at a time instead of together.
+// haLightsOn sends brightness and colour temp in ONE turn_on for the same
+// reason; kelvin <= 0 omits it.
+bool haLightsOff(uint8_t mask);
+bool haLightsOn(uint8_t mask, int pct, int kelvin);
+
 // climate.* service calls
 bool haClimateMode(DeviceState& d, const char* hvacMode);
 bool haClimateTemp(DeviceState& d, float celsius);

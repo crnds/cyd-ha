@@ -178,7 +178,7 @@ bool haPollAll() {
         //  2. The Sensibo reports nonsense transiently during an hvac_mode
         //     change. An actual observed sample was "cool,0,238,0,10,10" —
         //     target 0, min 0, max 1.0. Taking max=1.0 at face value would make
-        //     T+/T- clamp the setpoint to one degree.
+        //     the chevrons clamp the setpoint to one degree.
         float ftg = tg / 10.0f, frm = rm / 10.0f;
         float fmn = mn / 10.0f, fmx = mx / 10.0f, fsp = sp / 10.0f;
 
@@ -270,7 +270,7 @@ static void parseClimate(DeviceState& d, JsonDocument& doc) {
   if (!at["min_temp"].isNull())            d.tMin   = at["min_temp"].as<float>();
   if (!at["max_temp"].isNull())            d.tMax   = at["max_temp"].as<float>();
   // Sensibo reports 1.0 on most units but 0.5 on some — always prefer the
-  // entity's own value so T+/T- step by exactly what HA will accept.
+  // entity's own value so a chevron tap steps by exactly what HA will accept.
   if (!at["target_temp_step"].isNull())    d.tStep  = at["target_temp_step"].as<float>();
 }
 
@@ -345,6 +345,52 @@ bool haLightKelvin(DeviceState& d, int kelvin) {
   char body[160];
   snprintf(body, sizeof(body),
            "{\"entity_id\":\"%s\",\"color_temp_kelvin\":%d}", d.entityId, kelvin);
+  return haPostService("light", "turn_on", body);
+}
+
+// Builds  "a","b","c"  for the devices whose bit is set. Returns bytes written,
+// or -1 on overflow.
+static int idList(char* out, size_t n, uint8_t mask) {
+  int w = 0;
+  for (uint8_t i = 0; i < NUM_DEVICES; i++) {
+    if (!(mask & (1u << i))) continue;
+    int k = snprintf(out + w, n - (size_t)w, "%s\"%s\"", w ? "," : "",
+                     S.dev[i].entityId);
+    if (k < 0 || w + k >= (int)n) return -1;
+    w += k;
+  }
+  return w;
+}
+
+// A formatting overflow is a bug in here, not an HA outage, so it logs and
+// returns false WITHOUT markResult(false) — opening the breaker would make the
+// next unrelated tap fail fast for no reason. The 3-bulb body runs ~114 bytes
+// with the current entity IDs; 256 is sized so a rename cannot silently
+// truncate it into malformed JSON that HA answers with a 400.
+static bool sceneBodyOverflow(const char* what, int n, size_t cap) {
+  if (n > 0 && n < (int)cap) return false;
+  Serial.printf("ha: %s body overflow (%d of %u)\n", what, n, (unsigned)cap);
+  return true;
+}
+
+bool haLightsOff(uint8_t mask) {
+  char ids[192], body[256];
+  if (idList(ids, sizeof(ids), mask) <= 0) return false;
+  int n = snprintf(body, sizeof(body), "{\"entity_id\":[%s]}", ids);
+  if (sceneBodyOverflow("turn_off", n, sizeof(body))) return false;
+  return haPostService("light", "turn_off", body);
+}
+
+bool haLightsOn(uint8_t mask, int pct, int kelvin) {
+  char ids[192], body[256];
+  if (idList(ids, sizeof(ids), mask) <= 0) return false;
+  int n = (kelvin > 0)
+        ? snprintf(body, sizeof(body),
+                   "{\"entity_id\":[%s],\"brightness_pct\":%d,"
+                   "\"color_temp_kelvin\":%d}", ids, pct, kelvin)
+        : snprintf(body, sizeof(body),
+                   "{\"entity_id\":[%s],\"brightness_pct\":%d}", ids, pct);
+  if (sceneBodyOverflow("turn_on", n, sizeof(body))) return false;
   return haPostService("light", "turn_on", body);
 }
 

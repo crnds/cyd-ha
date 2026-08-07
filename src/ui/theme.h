@@ -1,33 +1,150 @@
 #pragma once
 #include <stdint.h>
 
-// Palette carried from ../btcticker-cyd/src/ui/theme.h so both devices in the
-// house read as one family. Values chosen to stay distinct after RGB565
-// quantization (5/6/5 bits).
+// COLOUR TOKENS — the palette half of the design system. The other half is
+// geometry (spacing scale, radii, control sizes), which lives in the LAYOUT
+// block of include/config.h because simulator.html mirrors that file and a
+// second geometry source is the thing that goes stale. Colour + type live here;
+// nothing else defines either.
+//
+// Tokens are SEMANTIC, not literal: the name says what a colour is for, so a
+// component never picks a hex value and two components asking for the same role
+// can never disagree. Ranked by the role they play:
+//
+//   ground        BG                      the screen behind everything
+//   surfaces      SURFACE ELEVATED        card fill, then controls on a card
+//   lines         BORDER DIVIDER          card edge, then rules inside one
+//   text          TEXT TEXT2 TEXT3        primary / secondary / tertiary
+//   inert         DISABLED DIM            unavailable control / stale value
+//   interactive   ACCENT                  selected, and only selected
+//                 NEUTRAL                 selected, but nothing is on
+//   status        SUCCESS WARNING ERROR    online / degraded / failed
+//   physical      WARM COOL                what 2202K and 4000K look like
+//
+// ACCENT is deliberately the only saturated colour in a resting UI: if
+// everything is highlighted, nothing is. SUCCESS/WARNING/ERROR appear only when
+// there is something to say.
+//
+// NEUTRAL is the one exception to "selected == ACCENT", and it exists because
+// OFF is not an accomplishment. A cyan OFF chip made the quietest state on the
+// Devices page the loudest mark on it, and with three bulbs off, three of the
+// four cards lit up. Grey still reads as selected — it is well clear of
+// ELEVATED — without claiming anything is happening. It is a fill role, not a
+// text one, which is why it is its own token rather than TEXT3 borrowed: the
+// two are free to move independently, exactly as SURFACE and ELEVATED are.
+//
+// These are RUNTIME values, not #defines, because night mode recolours the
+// whole UI in place. Consequence: NO C_* NAME MAY APPEAR IN A STATIC OR
+// CONSTEXPR INITIALIZER. (Nothing does — logo_ha.h's palette is raw hex.)
 
 // RGB888 -> RGB565, compile-time
 #define RGB565(r, g, b) \
   (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
 
-#define C_BG      RGB565(0x07, 0x09, 0x0D)  // ground
-#define C_SURFACE RGB565(0x15, 0x1B, 0x26)  // inactive button fill
-#define C_BORDER  RGB565(0x27, 0x30, 0x3F)  // hairlines / row separators
-#define C_TEXT    RGB565(0xF2, 0xF5, 0xFA)  // active button label, device names
-#define C_TEXT2   RGB565(0x9A, 0xA7, 0xBD)  // inactive button label, state text
-#define C_MUTED   RGB565(0x5C, 0x69, 0x80)  // micro-caps, disabled buttons
-#define C_DIM     RGB565(0x6E, 0x7A, 0x8F)  // stale (poll-failed) values
-#define C_GREEN   RGB565(0x00, 0xE1, 0x7B)  // online dot
-#define C_RED     RGB565(0xFF, 0x3B, 0x5F)  // offline dot, failed service call
-#define C_ACCENT  RGB565(0x18, 0xBC, 0xF2)  // active fill — Home Assistant cyan
+// One list, three derivations (slot enum, day table, night table), so a colour
+// cannot be half-added.
+//
+// Third column is the night override. THEME_DERIVE means "compute it from the
+// day colour by luminance" (see redOnly() in theme.cpp); anything else is a
+// hand-picked red, because pure luminance collapses pairs that MUST stay
+// distinguishable:
+//
+//   ERROR and DIM both derive to 0x7000 — and drawCard() picks between them on
+//   the very same string (red = failed service call / UNAVAILABLE, dim = stale
+//   poll). Collapsing them destroys the "fail soft" rule in CLAUDE.md.
+//   SUCCESS and ACCENT both derive to 0x9000, which would make the connectivity
+//   glyph read as the selected-tab fill. WARM and COOL land 2/31 steps apart,
+//   losing the "instantly distinguishable across a dark bedroom" property their
+//   own comment below claims. The four text tiers derive into a 15..21 huddle
+//   that destroys the hierarchy they exist to express.
+//
+// The overrides are ordered by 5-bit red level so nothing confusable sits
+// adjacent. Structural darks are left to derive (they are near-black either
+// way); every semantic colour is pinned. Measured ladder, all 17 distinct:
+//
+//   BG 0 < SURFACE 2 < DIVIDER 3 < ELEVATED 4 < BORDER 6 < DIM 7 < SUCCESS 10
+//   < DISABLED 12 < NEUTRAL 13 < WARM 14 < TEXT3 16 < ACCENT 18 < TEXT2 20
+//   < WARNING 22 < TEXT 25 < COOL 27 < ERROR 31
+//
+// The SURFACE/DIVIDER/ELEVATED trio sits one step apart, and that is the
+// intended result rather than a crowding failure: night mode exists to emit as
+// little light as possible, so the card, its rules and the controls on it all
+// collapse toward black and the page is carried by text and ACCENT alone. What
+// must not collapse is any pair a reader has to TELL APART — and every such pair
+// (DIM/ERROR, SUCCESS/ACCENT, WARM/COOL, NEUTRAL/ELEVATED, NEUTRAL/ACCENT, the
+// text tiers) is ≥2 steps clear.
+//
+// NEUTRAL's one-step neighbours are DISABLED and WARM, and neither is a pair:
+// the ladder ranks values, not roles, and those two never appear as the same
+// KIND of mark. NEUTRAL is only ever a chip fill; DISABLED is only ever a label
+// on a SURFACE fill (a disabled chip differs from a selected one by its whole
+// fill, not by 1/31 of red), and WARM is a swatch disc. There is no free level
+// with two clear steps below ACCENT — the low half of the ladder is full — so
+// this is the trade, and it is made on role separation rather than on hoping
+// nobody looks.
+//
+// simulator.html asserts the ladder is collision-free, which is the only cheap
+// way to check it without standing in a dark bedroom.
+//
+// TH_BG IS PINNED TO 0x0041 AND MUST NOT MOVE: logo_ha.h's generated palette
+// bakes that exact value as the splash mark's background, which is what lets
+// the logo blit as an opaque rectangle with no transparency handling. Change it
+// and the boot splash grows a visible 96x96 box. Regenerate the logo first.
+#define THEME_DERIVE 0xFFFF
+#define THEME_LIST(X)                                                          \
+  /*     slot          day                          night                   */ \
+  X(TH_BG,        RGB565(0x07, 0x09, 0x0D), THEME_DERIVE) /* ground        */  \
+  X(TH_SURFACE,   RGB565(0x16, 0x18, 0x1D), THEME_DERIVE) /* card fill     */  \
+  X(TH_ELEVATED,  RGB565(0x23, 0x27, 0x2F), THEME_DERIVE) /* control on it */  \
+  X(TH_BORDER,    RGB565(0x2F, 0x34, 0x3E), THEME_DERIVE) /* card edge     */  \
+  X(TH_DIVIDER,   RGB565(0x1C, 0x1F, 0x26), THEME_DERIVE) /* rule / track  */  \
+  X(TH_TEXT,      RGB565(0xF4, 0xF6, 0xFA), 0xC800)       /* primary       */  \
+  X(TH_TEXT2,     RGB565(0xA6, 0xB0, 0xC2), 0xA000)       /* secondary     */  \
+  X(TH_TEXT3,     RGB565(0x70, 0x7A, 0x8C), 0x8000)       /* tertiary      */  \
+  X(TH_DISABLED,  RGB565(0x44, 0x4C, 0x59), 0x6000)       /* unavailable   */  \
+  X(TH_DIM,       RGB565(0x8A, 0x94, 0xA6), 0x3800)       /* stale value   */  \
+  X(TH_ACCENT,    RGB565(0x18, 0xBC, 0xF2), THEME_DERIVE) /* selected      */  \
+  X(TH_NEUTRAL,   RGB565(0x7A, 0x82, 0x8E), 0x6800)       /* selected: off */  \
+  X(TH_SUCCESS,   RGB565(0x2F, 0xD9, 0x7C), 0x5000)       /* online        */  \
+  X(TH_WARNING,   RGB565(0xF5, 0xA5, 0x24), 0xB000)       /* degraded      */  \
+  X(TH_ERROR,     RGB565(0xFF, 0x4D, 0x6A), 0xF800)       /* failed        */  \
+  X(TH_WARM,      RGB565(0xFF, 0xB0, 0x5C), 0x7000)       /* ~2202K amber  */  \
+  X(TH_COOL,      RGB565(0xA6, 0xCD, 0xFF), 0xD800)       /* ~4000K blue   */
+
+#define TH_ENUM_(slot, day, night) slot,
+enum ThemeSlot : uint8_t { THEME_LIST(TH_ENUM_) TH_COUNT };
+#undef TH_ENUM_
+
+// Live palette. Written ONLY by themeSetNight().
+extern uint16_t THEME[TH_COUNT];
+
+// Cast to an rvalue so `C_BG = x;` cannot compile by accident.
+#define C_BG       ((uint16_t)THEME[TH_BG])
+#define C_SURFACE  ((uint16_t)THEME[TH_SURFACE])
+#define C_ELEVATED ((uint16_t)THEME[TH_ELEVATED])
+#define C_BORDER   ((uint16_t)THEME[TH_BORDER])
+#define C_DIVIDER  ((uint16_t)THEME[TH_DIVIDER])
+#define C_TEXT     ((uint16_t)THEME[TH_TEXT])
+#define C_TEXT2    ((uint16_t)THEME[TH_TEXT2])
+#define C_TEXT3    ((uint16_t)THEME[TH_TEXT3])
+#define C_DISABLED ((uint16_t)THEME[TH_DISABLED])
+#define C_DIM      ((uint16_t)THEME[TH_DIM])
+#define C_ACCENT   ((uint16_t)THEME[TH_ACCENT])
+#define C_NEUTRAL  ((uint16_t)THEME[TH_NEUTRAL])
+#define C_SUCCESS  ((uint16_t)THEME[TH_SUCCESS])
+#define C_WARNING  ((uint16_t)THEME[TH_WARNING])
+#define C_ERROR    ((uint16_t)THEME[TH_ERROR])
 
 // Colour-temperature swatches. These are what KELVIN_WARM / KELVIN_COOL look
 // like to the eye, not a physical blackbody conversion — the point is that the
-// two buttons are instantly distinguishable across a dark bedroom.
-#define C_WARM    RGB565(0xFF, 0xA5, 0x3C)  // ~2200K amber
-#define C_COOL    RGB565(0x9C, 0xC8, 0xFF)  // ~4000K cold white-blue
+// two controls are instantly distinguishable across a dark bedroom.
+#define C_WARM     ((uint16_t)THEME[TH_WARM])
+#define C_COOL     ((uint16_t)THEME[TH_COOL])
 
-// per-channel blend a -> b, t = 0..255. RGB565 has no alpha, so tinted fills
-// are precomputed blends against the background.
+// per-channel blend a -> b, t = 0..255. RGB565 has no alpha, so every "tinted"
+// or "translucent" fill in this UI is a precomputed blend against what is
+// behind it. That is also why there are no shadows or glass effects: they would
+// each cost a second read-modify-write of the panel.
 inline uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t) {
   int32_t ar = (a >> 11) & 0x1F, ag = (a >> 5) & 0x3F, ab = a & 0x1F;
   int32_t br = (b >> 11) & 0x1F, bg = (b >> 5) & 0x3F, bb = b & 0x1F;
@@ -37,5 +154,19 @@ inline uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t) {
   return (uint16_t)((r << 11) | (g << 5) | bl);
 }
 
-// dark tint of an accent (~22% toward it from bg) — inactive swatch fills
+// A selected surface: ~22% of the accent over the card, not the accent itself.
+// Used wherever a whole tile is selected rather than a small chip — a solid
+// accent slab at that size is the loudest thing on the panel, and it keeps the
+// solid fill meaningful as the press flash. Safe with the runtime palette: the
+// macro expands inside a function body, so C_* is read at call time.
 inline uint16_t tint565(uint16_t c) { return lerp565(C_BG, c, 56); }
+
+// Switches the whole palette. Returns true only when it actually changed, so
+// callers can skip the repaint — it is cheap enough to call every pass.
+bool themeSetNight(bool on);
+bool themeIsNight();
+
+// Maps one arbitrary colour the way the palette is currently mapped. Only the
+// splash logo needs this: its 9-entry palette is baked hex, so without it the
+// Home Assistant mark renders full-colour over a red-only UI.
+uint16_t themeMap(uint16_t c);

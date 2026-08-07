@@ -2,22 +2,23 @@
 <meta charset="utf-8">
 <title>cyd-ha layout simulator</title>
 <style>
-  body { background:#12151a; color:#9aa7bd; font:13px/1.5 ui-monospace,Menlo,monospace;
+  body { background:#0e1116; color:#a6b0c2; font:13px/1.55 ui-monospace,Menlo,monospace;
          margin:0; padding:24px; display:flex; gap:28px; flex-wrap:wrap; }
-  canvas { image-rendering:pixelated; border:1px solid #27303f; border-radius:6px; }
-  h1 { font-size:14px; color:#f2f5fa; margin:0 0 4px; letter-spacing:.08em; }
-  .panel { max-width:340px; }
-  .row { margin:10px 0; }
-  label { display:block; color:#5c6980; font-size:11px; letter-spacing:.08em;
-          text-transform:uppercase; margin-bottom:3px; }
+  canvas { image-rendering:pixelated; border:1px solid #2f343e; border-radius:8px; }
+  h1 { font-size:13px; color:#f4f6fa; margin:0 0 6px; letter-spacing:.09em;
+       text-transform:uppercase; }
+  .panel { max-width:390px; }
+  .row { margin:12px 0; }
+  label { display:block; color:#707a8c; font-size:11px; letter-spacing:.08em;
+          text-transform:uppercase; margin-bottom:4px; }
   input[type=range] { width:100%; }
-  button { background:#151b26; color:#9aa7bd; border:1px solid #27303f;
-           border-radius:4px; padding:5px 9px; font:inherit; cursor:pointer; }
-  button:hover { border-color:#18bcf2; color:#f2f5fa; }
-  #log { white-space:pre-wrap; color:#5c6980; font-size:11px; margin-top:10px;
-         min-height:5em; }
-  .warn { color:#ff3b5f; }
-  .ok { color:#00e17b; }
+  button { background:#23272f; color:#a6b0c2; border:0; border-radius:6px;
+           padding:6px 10px; font:inherit; cursor:pointer; margin:0 2px 3px 0; }
+  button:hover { background:#18bcf2; color:#07090d; }
+  #log { white-space:pre-wrap; color:#707a8c; font-size:11px; margin-top:12px; }
+  .warn { color:#ff4d6a; }
+  .ok { color:#2fd97c; }
+  .hd { color:#f4f6fa; }
 </style>
 
 <div>
@@ -27,142 +28,244 @@
 
 <div class="panel">
   <h1>Simulated state</h1>
-  <p>Click buttons on the canvas &mdash; this exercises the same hit-test
-     geometry as <code>screenHitTest()</code>.</p>
+  <p>Click the canvas. Tabs, chips, swatches, the AC stepper, scene tiles, the
+     scroll gutter and settings rows all run the same hit-test geometry as
+     <code>screenHitTest()</code>, including the AC row's reversed stepper slots.</p>
   <div class="row">
+    <label>Device state</label>
     <button onclick="setAll(true)">all bulbs on</button>
     <button onclick="setAll(false)">all bulbs off</button>
     <button onclick="stale=!stale;draw()">toggle stale</button>
     <button onclick="haOk=!haOk;draw()">toggle HA down</button>
-    <button onclick="dev[1].avail=!dev[1].avail;draw()">bulb 2 unavailable</button>
+    <button onclick="wifiOk=!wifiOk;draw()">toggle Wi-Fi down</button>
   </div>
   <div class="row">
-    <label>Bulb 1 brightness (off-preset levels test tolerances)</label>
+    <button onclick="dev[1].avail=!dev[1].avail;draw()">bulb 2 unavailable</button>
+    <button onclick="dev[2].ct=!dev[2].ct;draw()">bulb 3 no colour temp</button>
+    <button onclick="errFlash()">flash a failed call</button>
+    <button onclick="cycleMode()">cycle AC mode</button>
+  </div>
+  <div class="row">
+    <label>Long device name &mdash; exercises textTrunc()</label>
+    <button onclick="dev[0].name='TRADFRI BULB 1';draw()">short</button>
+    <button onclick="dev[0].name='Bedside reading lamp, left';draw()">long</button>
+    <button onclick="dev[0].name='Reading lamp (gy)';draw()">descenders</button>
+  </div>
+  <div class="row">
+    <label>Scene table size &mdash; the scroll gutter only appears past 9</label>
+    <button onclick="sceneStress(0)">5 scenes</button>
+    <button onclick="sceneStress(19)">24 scenes</button>
+    <button onclick="sceneStress(95)">100 scenes</button>
+  </div>
+  <div class="row">
+    <label>Bulb 1 brightness &mdash; off-preset levels test the tolerances</label>
     <input type="range" min="0" max="100" value="30"
            oninput="dev[0].pct=+this.value;dev[0].on=+this.value>0;draw()">
   </div>
   <div class="row">
-    <label>Bulb 3 colour temp</label>
-    <input type="range" min="2200" max="4000" value="4000"
+    <label>Bulb 3 colour temp &mdash; the card icon interpolates, chips bucket</label>
+    <input type="range" min="2202" max="4000" value="4000"
            oninput="dev[2].kelvin=+this.value;draw()">
   </div>
   <div id="log"></div>
 </div>
 
 <script>
-// Geometry mirrors include/config.h. Keep these in sync — the whole point of
-// this file is that a layout change can be checked here before flashing.
-const SCR_W=320, SCR_H=240, STATUS_H=18, ROWS_Y0=20, ROW_H=55;
-const ROW_LABEL_DY=1, ROW_BTN_DY=15, BTN_H=36;
-const BTN_X0=6, BTN_W=48, BTN_GAP=4, BTN_PITCH=BTN_W+BTN_GAP;
-const AC_BTN_W=58, AC_BTN_PITCH=AC_BTN_W+BTN_GAP;
-const BULB_BTNS=6, AC_BTNS=5;
+// ── GEOMETRY: mirrors the LAYOUT block of include/config.h ────────────────────
+// Keep these in sync. The whole point of this file is that a layout change can be
+// checked — including for clipping, which needs the REAL font metrics below — well
+// before spending a flash cycle.
+const SCR_W=320, SCR_H=240;
+const SP_1=4, SP_2=8, SP_3=12, SP_4=16, SP_6=24;
+const R_SM=6, R_LG=8;
 
+// header
+const STATUS_H=32, STATUS_ICO_W=26, TAB_X0=26, TAB_W=81, TAB_COUNT=3,
+      STATUS_CLK_W=51, STATUS_DIV_Y=STATUS_H-1, STATUS_CY=15, STATUS_ICO_CX=13;
+// Underline indicator, seated on the header rule. 2px so "Settings"' descenders
+// keep clear of it — asserted below, not assumed.
+const TAB_UL_H=2, TAB_UL_Y=STATUS_DIV_Y-TAB_UL_H, TAB_UL_PAD=2, TAB_LBL_DX=SP_1,
+      TAB_TAP_H=STATUS_H;
+
+// body / cards
+const ROWS_Y0=32, ROW_H=52;
+const CARD_DY=3, CARD_H=ROW_H-2*CARD_DY, CARD_X=SP_2, CARD_W=SCR_W-2*SP_2,
+      CARD_PAD=SP_2, CARD_IN_X0=CARD_X+CARD_PAD, CARD_IN_X1=CARD_X+CARD_W-CARD_PAD-1,
+      CARD_IN_W=CARD_W-2*CARD_PAD;
+const CARD_L1_CY=9, CARD_L1_Y=2, CARD_L1_H=19,
+      CARD_ICO_CX=CARD_X+15, CARD_ICO_R=7, CARD_TXT_X=CARD_X+28,
+      CTL_DY=21, CTL_H=22;
+
+// control grids
+const CHIP_W=54, CHIP_GAP=SP_1, CHIP_PITCH=CHIP_W+CHIP_GAP;
+const SW_X0=CARD_IN_X0+4*CHIP_PITCH-CHIP_GAP, SW_CELL_W=30, SW_R=11;
+const ACM_W=60, ACM_PITCH=ACM_W+CHIP_GAP,
+      ACS_X0=CARD_IN_X0+3*ACM_PITCH-CHIP_GAP, ACS_BTN_W=28, ACS_VAL_W=44;
+
+// settings
+const SET_ROWS=4, SET_ROW_BRI=0, SET_ROW_NIGHT=1, SET_ROW_SCHED=2, SET_ROW_FLIP=3;
+const SET_TITLE_CY=14, SET_CAP_CY=31;
+const TOGGLE_W=44, TOGGLE_H=24, TOGGLE_X=CARD_IN_X1-TOGGLE_W,
+      TOGGLE_DY=(CARD_H-TOGGLE_H)>>1;
+
+// scenes
+const SCENE_COLS=3, SCENE_VIS_ROWS=3, SCENE_TILE_W=88, SCENE_TILE_H=64,
+      SCENE_X0=SP_2, SCENE_GAP_X=SP_3, SCENE_GAP_Y=SP_2,
+      SCENE_PITCH_X=SCENE_TILE_W+SCENE_GAP_X, SCENE_PITCH_Y=SCENE_TILE_H+SCENE_GAP_Y,
+      SCENE_PER_PAGE=SCENE_COLS*SCENE_VIS_ROWS;
+const SCENE_PIP_DY=19, SCENE_PIP_R=4, SCENE_PIP_GAP=16, SCENE_NAME_DY=42;
+const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+SCR_H)>>1;
+
+const NUM_DEVICES=4, NUM_BULBS=3, BULB_BTNS=6, AC_BTNS=6;
+const AC_BTN_TUP=3, AC_BTN_TEMP=4, AC_BTN_TDN=5;
+const BRI_STEPS=5, BRI_LABEL=['1%','25%','50%','75%','100%'];
 const BRI_LOW=1, BRI_MID=30, BRI_HIGH=100;
 const KELVIN_WARM=2202, KELVIN_COOL=4000;
 const PCT_LOW_MAX=5, PCT_MID_MIN=25, PCT_MID_MAX=35, PCT_HIGH_MIN=95;
 const KELVIN_WARM_MAX=2500, KELVIN_COOL_MIN=3700;
+const PAGE_DEVICES=0, PAGE_SCENES=1, PAGE_SETTINGS=2;
+const TAB_LABEL=['Devices','Scenes','Settings'];
 
-// theme.h
-const C_BG='#07090d', C_SURFACE='#151b26', C_BORDER='#27303f',
-      C_TEXT='#f2f5fa', C_TEXT2='#9aa7bd', C_MUTED='#5c6980', C_DIM='#6e7a8f',
-      C_GREEN='#00e17b', C_RED='#ff3b5f', C_ACCENT='#18bcf2',
-      C_WARM='#ffa53c', C_COOL='#9cc8ff';
+// ── TYPE: exact xAdvance tables from TFT_eSPI's GFXFF headers ─────────────────
+// Extracted from the font headers, so textW() here is BYTE-IDENTICAL to
+// tft.textWidth() on the device. That is what makes the clipping warnings below
+// trustworthy — the old simulator approximated Font 2 with 13px system-ui and
+// could neither confirm nor deny a 1px overflow.
+//   F_BODY  FreeSans9pt7b       ascent 13 descent 5
+//   F_TITLE FreeSansBold9pt7b   ascent 13 descent 5
+//   F_NUM   FreeSansBold12pt7b  ascent 17 descent 6
+const ADV={
+ BODY:[5,6,6,10,10,16,12,4,6,6,7,11,5,6,5,5,10,10,10,10,10,10,10,10,10,10,5,5,11,11,11,10,18,12,12,13,13,11,11,14,13,5,10,12,10,15,13,14,12,14,13,12,11,13,12,17,12,12,11,5,5,5,8,10,5,10,10,9,10,10,5,10,10,4,4,9,4,15,10,10,10,10,6,9,5,10,9,13,9,9,9,6,4,6,9],
+ TITLE:[5,6,9,10,10,16,13,5,6,6,7,11,4,6,4,5,10,10,10,10,10,10,10,10,10,10,4,4,11,11,11,11,18,13,13,13,13,12,11,14,13,6,10,13,11,16,14,14,12,14,13,12,12,13,12,17,12,12,11,6,5,6,11,10,5,10,11,10,11,10,6,11,11,5,5,10,5,16,11,11,11,11,7,10,6,11,10,14,10,10,9,7,5,7,9],
+ NUM:[7,8,11,13,13,21,17,6,8,8,9,14,6,8,6,7,13,14,13,13,13,13,13,13,13,13,6,6,14,14,14,15,23,17,17,17,17,16,15,18,18,7,14,17,15,21,18,19,16,19,17,16,15,18,16,23,16,15,15,8,7,8,14,13,6,14,15,13,15,14,8,15,14,7,7,14,6,21,15,15,15,15,9,13,8,15,13,19,13,13,12,9,7,9,12],
+};
+const ASC={BODY:13,TITLE:13,NUM:17,MICRO:8};
+const DESC={BODY:5,TITLE:5,NUM:6,MICRO:0};
+// Cap heights are 13/13/18, so the CSS size is chosen to match cap height, not
+// em box: Helvetica caps are ~0.717em.
+const CSS={BODY:'18px Helvetica,Arial,sans-serif',
+           TITLE:'bold 18px Helvetica,Arial,sans-serif',
+           NUM:'bold 25px Helvetica,Arial,sans-serif',
+           MICRO:'8px ui-monospace,Menlo,monospace'};
 
-const BULB_LABEL=['OFF','1%','30%','100%',null,null];
-const AC_LABEL=['OFF','AC','DRY','T+','T-'];
-
-let stale=false, haOk=true;
-let dev=[
-  {name:'TRADFRI BULB 1', kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
-  {name:'TRADFRI BULB 2', kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
-  {name:'TRADFRI BULB 3', kind:'light',   on:true,  pct:100, kelvin:4000, ct:true, known:true, avail:true},
-  {name:'SENSIBO SKY AC', kind:'climate', mode:'cool', target:24, room:27,  known:true, avail:true},
-];
-
-const cv=document.getElementById('c'), g=cv.getContext('2d'), S=3;
-g.scale(S,S);
-const log=document.getElementById('log');
-
-function setAll(on){ dev.forEach(d=>{ if(d.kind==='light') d.on=on; }); draw(); }
-
-function btnCount(d){ return d.kind==='climate'?AC_BTNS:BULB_BTNS; }
-function rowTop(i){ return ROWS_Y0+i*ROW_H; }
-function btnRect(i,b){
-  const ac=dev[i].kind==='climate';
-  return { x:BTN_X0+b*(ac?AC_BTN_PITCH:BTN_PITCH), y:rowTop(i)+ROW_BTN_DY,
-           w:ac?AC_BTN_W:BTN_W, h:BTN_H };
-}
-
-function btnActive(d,b){
-  if(!d.avail) return false;
-  if(d.kind==='climate'){
-    if(b===0) return d.mode==='off';
-    if(b===1) return d.mode==='cool';
-    if(b===2) return d.mode==='dry';
-    return false;
-  }
-  if(!d.on) return b===0;
-  if(b===1) return d.pct>=0 && d.pct<=PCT_LOW_MAX;
-  if(b===2) return d.pct>=PCT_MID_MIN && d.pct<=PCT_MID_MAX;
-  if(b===3) return d.pct>=PCT_HIGH_MIN;
-  if(b===4) return d.ct && d.kelvin>0 && d.kelvin<=KELVIN_WARM_MAX;
-  if(b===5) return d.ct && d.kelvin>=KELVIN_COOL_MIN;
-  return false;
-}
-
-// TFT_eSPI GLCD Font 1 is a fixed 6px advance / 8px cell — drawing char by
-// char at 6px reproduces its metrics exactly, which is what makes the
-// "does the name + state line fit" check here trustworthy.
-function font1(text,x,y,colour,align){
-  g.fillStyle=colour;
-  g.font='8px ui-monospace, Menlo, monospace';
-  g.textBaseline='top';
-  const w=text.length*6;
-  let sx = align==='right' ? x-w : align==='center' ? x-w/2 : x;
-  for(let i=0;i<text.length;i++) g.fillText(text[i], sx+i*6, y);
+function textW(role,s){
+  if(!s) return 0;
+  if(role==='MICRO') return s.length*6;
+  const t=ADV[role]; let w=0;
+  for(const ch of s){ const i=ch.charCodeAt(0)-0x20; w += (i>=0&&i<t.length)?t[i]:0; }
   return w;
 }
-// Font 2 approximation (16px tall, proportional).
-function font2w(text){ g.font='13px system-ui, sans-serif'; return g.measureText(text).width; }
-function font2(text,x,y,colour){
-  g.fillStyle=colour; g.font='13px system-ui, sans-serif';
-  g.textAlign='center'; g.textBaseline='middle';
-  g.fillText(text,x,y); g.textAlign='left';
-}
-
-function roundRect(x,y,w,h,r,fill,stroke){
-  g.beginPath(); g.moveTo(x+r,y);
-  g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
-  g.arcTo(x,y+h,x,y,r);     g.arcTo(x,y,x+w,y,r);
-  g.closePath();
-  if(fill){ g.fillStyle=fill; g.fill(); }
-  if(stroke){ g.strokeStyle=stroke; g.lineWidth=1; g.stroke(); }
-}
-
-let clipWarnings=[];
-
-function drawTextButton(r,label,active,disabled){
-  let fill,edge,fg;
-  if(disabled){ fill=C_BG; edge=C_BORDER; fg=C_MUTED; }
-  else if(active){ fill=C_ACCENT; edge=C_ACCENT; fg=C_BG; }
-  else      { fill=C_SURFACE; edge=C_BORDER; fg=C_TEXT2; }
-  roundRect(r.x,r.y,r.w,r.h,4,fill,edge);
-  const maxW=r.w-6;
-  if(font2w(label)<=maxW) font2(label,r.x+r.w/2,r.y+r.h/2,fg);
-  else {
-    clipWarnings.push(`"${label}" needs ${font2w(label).toFixed(0)}px, has ${maxW}px -> falls back`);
-    font1(label,r.x+r.w/2,r.y+r.h/2-4,fg,'center');
+// Draws char by char at the firmware's exact advances, so a string occupies the
+// same pixels here as on the panel even though the glyph shapes differ slightly.
+// TFT_eSPI centres free fonts on their ASCENT with an M* datum, which is why the
+// baseline is cy + ascent/2 rather than anything font-metric-derived.
+function gtext(role,s,x,cy,align,colour){
+  if(!s) return 0;
+  const w=textW(role,s);
+  let sx = align==='right' ? x-w : align==='center' ? Math.round(x-w/2) : x;
+  const base = cy + (ASC[role]>>1);
+  g.fillStyle=colour; g.font=CSS[role]; g.textAlign='left'; g.textBaseline='alphabetic';
+  const t = role==='MICRO' ? null : ADV[role];
+  for(const ch of s){
+    g.fillText(ch,sx,base);
+    const i=ch.charCodeAt(0)-0x20;
+    sx += t ? ((i>=0&&i<t.length)?t[i]:0) : 6;
   }
+  return w;
+}
+// Mirrors textFit(): role, then a shorter alt, then MICRO. Every fallback is
+// reported, because a fallback on the device means a label the designer did not
+// choose.
+function textFit(role,s,alt,cx,cy,maxW,colour,what){
+  if(textW(role,s)<=maxW){ gtext(role,s,cx,cy,'center',colour); return; }
+  if(alt && textW(role,alt)<=maxW){
+    warn(`${what}: "${s}" needs ${textW(role,s)}px of ${maxW}px -> falls back to "${alt}"`);
+    gtext(role,alt,cx,cy,'center',colour); return;
+  }
+  warn(`${what}: "${s}" needs ${textW(role,s)}px of ${maxW}px -> falls back to MICRO`);
+  gtext('MICRO',s,cx,cy,'center',colour);
+}
+// Mirrors textTrunc(): drop characters, append "..".
+function textTrunc(role,s,x,cy,maxW,colour,what){
+  if(textW(role,s)<=maxW){ gtext(role,s,x,cy,'left',colour); return; }
+  let n=s.length;
+  while(n>0){
+    const t=s.slice(0,n)+'..';
+    if(textW(role,t)<=maxW){
+      warn(`${what}: "${s}" truncated to "${t}" (${maxW}px budget)`);
+      gtext(role,t,x,cy,'left',colour); return;
+    }
+    n--;
+  }
+  warn(`${what}: "${s}" does not fit at all (${maxW}px budget) -> drawn nothing`);
 }
 
-function drawSwatch(r,colour,kLabel,active,disabled){
-  let fill,edge,fg;
-  if(disabled){ fill=C_BG; edge=C_BORDER; fg=C_MUTED; }
-  else if(active){ fill=colour; edge=colour; fg=C_BG; }
-  else { fill=mix(C_BG,colour,56/255); edge=C_BORDER; fg=colour; }
-  roundRect(r.x,r.y,r.w,r.h,4,fill,edge);
-  font1(disabled?'n/a':kLabel, r.x+r.w/2, r.y+r.h/2-4, fg, 'center');
+// ── COLOUR: mirrors theme.h's THEME_LIST ─────────────────────────────────────
+// null night = derive by luminance (redOnly). The pinned reds exist because pure
+// luminance collapses pairs that must stay distinguishable.
+const THEME_LIST=[
+  ['BG',      '#07090d', null],
+  ['SURFACE', '#16181d', null],
+  ['ELEVATED','#23272f', null],
+  ['BORDER',  '#2f343e', null],
+  ['DIVIDER', '#1c1f26', null],
+  ['TEXT',    '#f4f6fa', 0xC800],
+  ['TEXT2',   '#a6b0c2', 0xA000],
+  ['TEXT3',   '#707a8c', 0x8000],
+  ['DISABLED','#444c59', 0x6000],
+  ['DIM',     '#8a94a6', 0x3800],
+  ['ACCENT',  '#18bcf2', null],
+  ['NEUTRAL', '#7a828e', 0x6800],
+  ['SUCCESS', '#2fd97c', 0x5000],
+  ['WARNING', '#f5a524', 0xB000],
+  ['ERROR',   '#ff4d6a', 0xF800],
+  ['WARM',    '#ffb05c', 0x7000],
+  ['COOL',    '#a6cdff', 0xD800],
+];
+const to565=h=>((parseInt(h.slice(1,3),16)&0xF8)<<8)|
+               ((parseInt(h.slice(3,5),16)&0xFC)<<3)|
+                (parseInt(h.slice(5,7),16)>>3);
+function from565(v){
+  const r=Math.round(((v>>11)&0x1F)*255/31),
+        gg=Math.round(((v>>5)&0x3F)*255/63),
+        b=Math.round((v&0x1F)*255/31);
+  return '#'+[r,gg,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+// Byte-for-byte the firmware's redOnly(): luminance into the red channel only.
+function redOnly(c){
+  const r8=Math.floor((((c>>11)&0x1F)*255+15)/31),
+        g8=Math.floor((((c>>5)&0x3F)*255+31)/63),
+        b8=Math.floor(((c&0x1F)*255+15)/31);
+  return (Math.floor((r8*299+g8*587+b8*114)/1000)&0xF8)<<8;
+}
+let C={};
+function applyTheme(night){
+  for(const [name,day,ovr] of THEME_LIST)
+    C[name] = night ? from565(ovr===null?redOnly(to565(day)):ovr) : day;
+}
+// The night ladder assertion theme.h's comment claims. Collisions are the real
+// failure — a pair that must be told apart landing on one value — so those are
+// errors; the intended SURFACE/DIVIDER/ELEVATED huddle is reported, not flagged.
+// NEUTRAL/ELEVATED is "is OFF selected?" and NEUTRAL/ACCENT is "selected off vs
+// selected on" — both are chip fills a reader compares directly, so both have to
+// survive the collapse to red.
+const MUST_DIFFER=[['DIM','ERROR'],['SUCCESS','ACCENT'],['WARM','COOL'],
+                   ['TEXT','TEXT2'],['TEXT2','TEXT3'],['TEXT3','DISABLED'],
+                   ['NEUTRAL','ELEVATED'],['NEUTRAL','ACCENT']];
+function checkNightLadder(){
+  const lvl={};
+  for(const [name,day,ovr] of THEME_LIST)
+    lvl[name]=((ovr===null?redOnly(to565(day)):ovr)>>11)&0x1F;
+  const seen={};
+  for(const k in lvl){
+    if(seen[lvl[k]]!==undefined) warn(`night palette: ${k} and ${seen[lvl[k]]} both map to red level ${lvl[k]}`);
+    seen[lvl[k]]=k;
+  }
+  for(const [a,b] of MUST_DIFFER){
+    const d=Math.abs(lvl[a]-lvl[b]);
+    if(d<2) warn(`night palette: ${a} and ${b} are ${d} step(s) apart and must be told apart`);
+  }
+  return Object.keys(lvl).sort((a,b)=>lvl[a]-lvl[b]).map(k=>`${k} ${lvl[k]}`).join(' < ');
 }
 
 function mix(a,b,t){
@@ -171,79 +274,574 @@ function mix(a,b,t){
   const c=(x,y)=>Math.round(x+(y-x)*t).toString(16).padStart(2,'0');
   return `#${c(ar,br)}${c(ag,bg)}${c(ab,bb)}`;
 }
+const tint=c=>mix(C.BG,c,56/255);
 
-function stateText(d){
-  if(!d.known) return '--';
-  if(!d.avail) return 'UNAVAILABLE';
-  if(d.kind==='climate'){
-    const m={off:'OFF',cool:'COOL',dry:'DRY'}[d.mode]||d.mode.toUpperCase();
-    return `${m}  set ${d.target}  room ${d.room}`;
+// ── state ────────────────────────────────────────────────────────────────────
+const BULB_LABEL=['OFF','1%','30%','100%',null,null];
+const BULB_LABEL_ALT=['OFF','1','30','100',null,null];
+const AC_LABEL=['OFF','COOL','DRY',null,null,null];
+const SET_LABEL=['Brightness','Night mode','Night schedule','Flip screen'];
+const SET_CAPTION=[null,'Red display, 1% backlight','23:45 - 08:00','Rotate 180 degrees'];
+
+const SB_OFF={on:false}, SB_MIDW={on:true,pct:BRI_MID,kelvin:KELVIN_WARM},
+      SB_HIW={on:true,pct:BRI_HIGH,kelvin:KELVIN_WARM},
+      SB_HIC={on:true,pct:BRI_HIGH,kelvin:KELVIN_COOL};
+let SCENE=[
+  {name:'OFF',   b:[SB_OFF, SB_OFF, SB_OFF ]},
+  {name:'RELAX', b:[SB_OFF, SB_OFF, SB_MIDW]},
+  {name:'WORK',  b:[SB_MIDW,SB_MIDW,SB_MIDW]},
+  {name:'AWAKE', b:[SB_HIW, SB_HIW, SB_HIW ]},
+  {name:'DAY',   b:[SB_HIC, SB_HIC, SB_HIC ]},
+];
+const SCENE_BASE=SCENE.slice();
+// The firmware's scroll path is dead code while five scenes fit on one page, so
+// it can only be exercised by growing the table. This is that lever — the point
+// of validating a "ready to scale" layout is seeing it at scale.
+function sceneStress(n){
+  SCENE=SCENE_BASE.slice();
+  const pat=[SB_OFF,SB_MIDW,SB_HIW,SB_HIC];
+  for(let i=0;i<n;i++)
+    SCENE.push({name:'S'+(i+1),b:[pat[i%4],pat[(i+1)%4],pat[(i+2)%4]]});
+  sceneRow=0; draw();
+}
+const sceneRowsN=()=>Math.ceil(SCENE.length/SCENE_COLS);
+const sceneMaxRow=()=>Math.max(0, sceneRowsN()-SCENE_VIS_ROWS);
+
+let stale=false, haOk=true, wifiOk=true, page=PAGE_DEVICES, sceneRow=0, errAt=0;
+let set={briIdx:2, night:false, nightSched:true, flip:false};
+let dev=[
+  {name:'TRADFRI BULB 1', kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
+  {name:'TRADFRI BULB 2', kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
+  {name:'TRADFRI BULB 3', kind:'light',   on:true,  pct:100, kelvin:4000, ct:true, known:true, avail:true},
+  {name:'SENSIBO SKY AC', kind:'climate', mode:'cool', target:24, room:27, known:true, avail:true},
+];
+const AC_MODES=['off','cool','dry','heat'];
+function cycleMode(){ const d=dev[3]; d.mode=AC_MODES[(AC_MODES.indexOf(d.mode)+1)%AC_MODES.length]; draw(); }
+function errFlash(){ errAt=Date.now(); draw(); setTimeout(()=>{errAt=0;draw();},1500); }
+const isErr=()=>errAt&&Date.now()-errAt<1500;
+function setAll(on){ dev.forEach(d=>{ if(d.kind==='light') d.on=on; }); draw(); }
+
+const cv=document.getElementById('c'), g=cv.getContext('2d'), S=3;
+g.scale(S,S);
+const log=document.getElementById('log');
+let warnings=[];
+const warn=m=>warnings.push(m);
+
+// ── geometry helpers, mirroring screen.cpp ───────────────────────────────────
+function btnCount(d){ return d.kind==='climate'?AC_BTNS:BULB_BTNS; }
+const rowTop  = i => ROWS_Y0+i*ROW_H;
+const cardTop = i => rowTop(i)+CARD_DY;
+const sceneTileX = s => SCENE_X0+(s%SCENE_COLS)*SCENE_PITCH_X;
+const sceneTileY = s => ROWS_Y0+Math.floor(s/SCENE_COLS)*SCENE_PITCH_Y;
+
+// The one function that knows the two row kinds lay out the same six slots
+// differently — including the AC stepper's reversed slot order (5 left, 3 right).
+function btnRect(i,b){
+  const y=cardTop(i)+CTL_DY, h=CTL_H;
+  if(dev[i].kind==='climate'){
+    if(b<3) return {x:CARD_IN_X0+b*ACM_PITCH, y, w:ACM_W, h};
+    if(b===AC_BTN_TDN)  return {x:ACS_X0,                       y, w:ACS_BTN_W, h};
+    if(b===AC_BTN_TEMP) return {x:ACS_X0+ACS_BTN_W,             y, w:ACS_VAL_W, h};
+    return {x:ACS_X0+ACS_BTN_W+ACS_VAL_W,                       y, w:ACS_BTN_W, h};
   }
-  if(!d.on) return 'OFF';
-  return d.ct && d.kelvin>0 ? `${d.pct}%  ${d.kelvin}K` : `${d.pct}%`;
+  if(b<4) return {x:CARD_IN_X0+b*CHIP_PITCH, y, w:CHIP_W, h};
+  return {x:SW_X0+(b-4)*SW_CELL_W, y, w:SW_CELL_W, h};
+}
+function briRect(b){
+  return {x:CARD_IN_X0+b*CHIP_PITCH, y:cardTop(SET_ROW_BRI)+CTL_DY, w:CHIP_W, h:CTL_H};
+}
+
+function pctMatches(want,got){
+  if(want>=BRI_HIGH) return got>=PCT_HIGH_MIN;
+  if(want>=BRI_MID)  return got>=PCT_MID_MIN && got<=PCT_MID_MAX;
+  return got>=0 && got<=PCT_LOW_MAX;
+}
+function kelvinMatches(want,got){
+  return want<=KELVIN_WARM_MAX ? (got>0 && got<=KELVIN_WARM_MAX) : (got>=KELVIN_COOL_MIN);
+}
+function btnActive(d,b){
+  if(!d.avail) return false;
+  if(d.kind==='climate') return b===0?d.mode==='off':b===1?d.mode==='cool':b===2?d.mode==='dry':false;
+  if(!d.on) return b===0;
+  if(b===1) return pctMatches(BRI_LOW,d.pct);
+  if(b===2) return pctMatches(BRI_MID,d.pct);
+  if(b===3) return pctMatches(BRI_HIGH,d.pct);
+  if(b===4) return d.ct && kelvinMatches(KELVIN_WARM,d.kelvin);
+  if(b===5) return d.ct && kelvinMatches(KELVIN_COOL,d.kelvin);
+  return false;
+}
+// Derived every draw, never latched — same as sceneActive() in screen.cpp.
+function sceneActive(idx){
+  if(idx>=SCENE.length) return false;
+  for(let i=0;i<NUM_BULBS;i++){
+    const d=dev[i], w=SCENE[idx].b[i];
+    if(!d.known || !d.avail) return false;
+    if(!w.on){ if(d.on) return false; continue; }
+    if(!d.on) return false;
+    if(d.pct<0 || !pctMatches(w.pct,d.pct)) return false;
+    if(w.kelvin>0 && d.ct){
+      if(!(d.kelvin>0) || !kelvinMatches(w.kelvin,d.kelvin)) return false;
+    }
+  }
+  return true;
+}
+
+// ── primitives ───────────────────────────────────────────────────────────────
+function roundRect(x,y,w,h,r,fill,stroke){
+  g.beginPath(); g.moveTo(x+r,y);
+  g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
+  g.arcTo(x,y+h,x,y,r);     g.arcTo(x,y,x+w,y,r);
+  g.closePath();
+  if(fill){ g.fillStyle=fill; g.fill(); }
+  if(stroke&&stroke!==fill){ g.strokeStyle=stroke; g.lineWidth=1; g.stroke(); }
+}
+function disc(cx,cy,r,fill,stroke){
+  g.beginPath(); g.arc(cx,cy,r,0,7);
+  if(fill){ g.fillStyle=fill; g.fill(); }
+  if(stroke){ g.strokeStyle=stroke; g.lineWidth=1; g.stroke(); }
+}
+function tri(pts,c){
+  g.beginPath(); g.moveTo(pts[0],pts[1]); g.lineTo(pts[2],pts[3]); g.lineTo(pts[4],pts[5]);
+  g.closePath(); g.fillStyle=c; g.fill();
+}
+function line(x1,y1,x2,y2,c){
+  g.strokeStyle=c; g.lineWidth=1;
+  g.beginPath(); g.moveTo(x1+.5,y1+.5); g.lineTo(x2+.5,y2+.5); g.stroke();
+}
+
+// mirrors ctlColour()
+function ctlColour(vis){
+  switch(vis){
+    case 'pressed':  return {fill:C.TEXT,     edge:C.TEXT,     fg:C.BG};
+    case 'active':   return {fill:C.ACCENT,   edge:C.ACCENT,   fg:C.BG};
+    case 'activeOff':return {fill:C.NEUTRAL,  edge:C.NEUTRAL,  fg:C.BG};
+    case 'disabled': return {fill:C.SURFACE,  edge:C.SURFACE,  fg:C.DISABLED};
+    case 'err':      return {fill:C.SURFACE,  edge:C.ERROR,    fg:C.ERROR};
+    default:         return {fill:C.ELEVATED, edge:C.ELEVATED, fg:C.TEXT2};
+  }
+}
+function wChip(r,label,alt,vis,what){
+  const c=ctlColour(vis);
+  roundRect(r.x,r.y,r.w,r.h,R_SM,c.fill,c.edge);
+  textFit('BODY',label,alt,r.x+r.w/2,r.y+r.h/2,r.w-2*SP_1,c.fg,what);
+}
+function wStepBtn(r,up,vis){
+  const c=ctlColour(vis==='active'?'inactive':vis);
+  roundRect(r.x,r.y,r.w,r.h,R_SM,c.fill,c.edge);
+  icoChevron(r.x+r.w/2,r.y+r.h/2,up,c.fg,6,4);
+}
+function wSwatch(cx,cy,r,colour,vis){
+  if(vis==='active'){ disc(cx,cy,r-2,colour); disc(cx,cy,r,null,colour); }
+  else if(vis==='pressed') disc(cx,cy,r-2,C.TEXT);
+  else if(vis==='disabled') disc(cx,cy,r-2,null,C.DISABLED);
+  else { disc(cx,cy,r-2,tint(colour)); disc(cx,cy,r-2,null,mix(C.BG,colour,150/255)); }
+}
+function wToggle(x,y,w,h,on){
+  const r=h/2;
+  if(on){ roundRect(x,y,w,h,r,C.ACCENT,C.ACCENT); disc(x+w-r,y+r,r-3,C.BG); }
+  else  { roundRect(x,y,w,h,r,C.ELEVATED,C.ELEVATED); disc(x+r,y+r,r-3,C.TEXT3); }
+}
+function wValue(r,val,degree,fg,bg){
+  g.fillStyle=bg; g.fillRect(r.x,r.y,r.w,r.h);
+  const vw=textW('NUM',val), degW=degree?9:0, cy=r.y+r.h/2;
+  const bx=r.x+Math.round((r.w-(vw+degW))/2);
+  if(vw+degW>r.w) warn(`AC setpoint "${val}" needs ${vw+degW}px of ${r.w}px`);
+  gtext('NUM',val,bx,cy,'left',fg);
+  if(degree){
+    const ry=cy-(ASC.NUM>>1)+3;
+    disc(bx+vw+5,ry,3,null,fg); disc(bx+vw+5,ry,2,null,fg);
+  }
+}
+// The bar is flush with the bottom of the rect, which is what seats it on the
+// header rule; it spans the word rather than the cell.
+function wTab(x,y,w,h,label,vis){
+  const sel=(vis==='active'||vis==='pressed');
+  textFit('BODY',label,null,x+w/2,y+h/2,w-2*TAB_LBL_DX,sel?C.TEXT:C.TEXT3,'tab');
+  if(!sel) return;
+  const uw=Math.min(textW('BODY',label)+2*TAB_UL_PAD,w);
+  g.fillStyle=vis==='pressed'?C.TEXT:C.ACCENT;
+  g.fillRect(x+Math.floor((w-uw)/2),y+h-TAB_UL_H,uw,TAB_UL_H);
+}
+
+// ── icons: same construction as src/ui/icons.cpp ─────────────────────────────
+function icoBulb(cx,cy,c,filled){
+  const gy=cy-2;
+  disc(cx,gy,5,filled?c:null,filled?null:c);
+  g.fillStyle=c;
+  g.fillRect(cx-3,cy+4,7,2); g.fillRect(cx-2,cy+6,5,1);
+}
+function icoSnow(cx,cy,c){
+  line(cx,cy-6,cx,cy+6,c); line(cx-5,cy-3,cx+5,cy+3,c); line(cx-5,cy+3,cx+5,cy-3,c);
+  g.fillStyle=c; g.fillRect(cx-2,cy-4,5,1); g.fillRect(cx-2,cy+4,5,1);
+}
+function icoDrop(cx,cy,c){
+  tri([cx,cy-7,cx-5,cy+1,cx+5,cy+1],c); disc(cx,cy+1,5,c);
+}
+function arc(cx,cy,r,a0,a1,c){
+  g.strokeStyle=c; g.lineWidth=1; g.beginPath(); g.arc(cx,cy,r,a0,a1); g.stroke();
+}
+function icoPower(cx,cy,c){
+  arc(cx,cy+1,6,0,Math.PI,c);
+  g.fillStyle=c; g.fillRect(cx-6,cy-2,1,4); g.fillRect(cx+6,cy-2,1,4);
+  g.fillRect(cx,cy-7,1,6);
+}
+function icoSun(cx,cy,c){
+  disc(cx,cy,3,c); g.fillStyle=c;
+  g.fillRect(cx,cy-7,1,3); g.fillRect(cx,cy+5,1,3);
+  g.fillRect(cx-7,cy,3,1); g.fillRect(cx+5,cy,3,1);
+  for(const [dx,dy] of [[-5,-5],[5,-5],[-5,5],[5,5]]) g.fillRect(cx+dx,cy+dy,1,1);
+}
+function icoMoon(cx,cy,c,bg){ disc(cx-1,cy,7,c); disc(cx+4,cy-3,6,bg); }
+function icoClock(cx,cy,c){
+  disc(cx,cy,7,null,c); g.fillStyle=c;
+  g.fillRect(cx,cy-4,1,5); g.fillRect(cx,cy,4,1);
+}
+function icoRotate(cx,cy,c){
+  arc(cx,cy,6,Math.PI,0,c); arc(cx,cy,6,0,Math.PI,c);
+  tri([cx+3,cy-1,cx+8,cy-1,cx+6,cy+4],c);
+  tri([cx-3,cy+1,cx-8,cy+1,cx-6,cy-4],c);
+}
+function icoWifi(cx,cy,bars,on,off){
+  for(let i=0;i<3;i++){
+    const h=4+i*3;
+    g.fillStyle=i<bars?on:off;
+    g.fillRect(cx-5+i*4,cy+5-h,2,h);
+  }
+}
+function icoChevron(cx,cy,up,c,hw,hh){
+  tri(up?[cx-hw,cy+hh,cx+hw,cy+hh,cx,cy-hh]:[cx-hw,cy-hh,cx+hw,cy-hh,cx,cy+hh],c);
+}
+function icoBadge(cx,cy,c,ring){ disc(cx,cy,3,ring); disc(cx,cy,2,c); }
+
+// ── derived appearance, mirroring screen.cpp ─────────────────────────────────
+function bulbHue(d){
+  if(!d.ct || !(d.kelvin>0)) return C.TEXT2;
+  let t=Math.round((d.kelvin-KELVIN_WARM)*255/(KELVIN_COOL-KELVIN_WARM));
+  t=Math.max(0,Math.min(255,t));
+  return mix(C.WARM,C.COOL,t/255);
+}
+function iconVis(d,stale){
+  // An offline device is not ALSO dimmed: red outranks stale.
+  if(!d.known || !d.avail)
+    return {shape:d.kind==='climate'?'power':'bulbOff', colour:d.known?C.ERROR:C.DISABLED};
+  let v;
+  if(d.kind==='climate'){
+    if(d.mode==='cool')      v={shape:'snow', colour:C.ACCENT};
+    else if(d.mode==='dry')  v={shape:'drop', colour:C.ACCENT};
+    else if(d.mode==='off')  v={shape:'power',colour:C.DISABLED};
+    // POWER, not a snowflake: a snowflake beside the word HEAT is simply wrong.
+    else                     v={shape:'power',colour:C.TEXT2};
+  }
+  else if(!d.on) v={shape:'bulbOff', colour:C.DISABLED};
+  else {
+    const hue=bulbHue(d);
+    v={shape:'bulbOn',
+       colour:(d.pct>=0&&d.pct<BRI_HIGH)?mix(C.SURFACE,hue,(70+d.pct*185/100)/255):hue};
+  }
+  // Same fail-soft rule as the state text: keep the reading, dim it once stale.
+  if(stale) v.colour=mix(C.SURFACE,v.colour,110/255);
+  return v;
+}
+function drawIcon(v,cx,cy){
+  switch(v.shape){
+    case 'bulbOn': icoBulb(cx,cy,v.colour,true); break;
+    case 'snow':   icoSnow(cx,cy,v.colour); break;
+    case 'drop':   icoDrop(cx,cy,v.colour); break;
+    case 'power':  icoPower(cx,cy,v.colour); break;
+    default:       icoBulb(cx,cy,v.colour,false);
+  }
+}
+function prettyMode(m){
+  return {heat:'HEAT',fan_only:'FAN',auto:'AUTO',unavailable:'UNAVAIL'}[m] || (m||'?');
+}
+function stateText(d){
+  if(!d.known) return {s:'--',deg:false};
+  // "OFFLINE", not "UNAVAILABLE": 75px against 122px, which is what keeps a
+  // 14-character device name from being truncated in the one state where the
+  // name still matters for identifying WHICH device went away.
+  if(!d.avail) return {s:'OFFLINE',deg:false};
+  if(d.kind==='climate'){
+    const charted = d.mode==='off'||d.mode==='cool'||d.mode==='dry';
+    // An exceptional mode drops the "Room" label rather than the device name.
+    if(d.room!=null)
+      return {s: charted?`Room ${d.room}`:`${prettyMode(d.mode)}  ${d.room}`, deg:true};
+    return {s: charted?'':prettyMode(d.mode), deg:false};
+  }
+  if(!d.on) return {s:'Off',deg:false};
+  if(d.pct>=0) return {s: d.ct&&d.kelvin>0?`${d.pct}%  ${d.kelvin}K`:`${d.pct}%`, deg:false};
+  return {s:'On',deg:false};
+}
+
+// ── pages ────────────────────────────────────────────────────────────────────
+function drawDevices(){
+  dev.forEach((d,i)=>{
+    const top=cardTop(i), err=isErr();
+    roundRect(CARD_X,top,CARD_W,CARD_H,R_LG,C.SURFACE,err?C.ERROR:C.BORDER);
+
+    drawIcon(iconVis(d,stale),CARD_ICO_CX,top+CARD_L1_CY);
+
+    const st=stateText(d);
+    const stFg=(err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT2);
+    const stW=textW('BODY',st.s)+(st.deg?9:0);
+    textTrunc('TITLE',d.name,CARD_TXT_X,top+CARD_L1_CY,
+              CARD_IN_X1-CARD_TXT_X-stW-SP_2, stale?C.DIM:C.TEXT, `row ${i} name`);
+    if(st.s){
+      gtext('BODY',st.s,CARD_IN_X1-(st.deg?9:0),top+CARD_L1_CY,'right',stFg);
+      if(st.deg) disc(CARD_IN_X1-3,top+CARD_L1_CY-(ASC.BODY>>1)+2,2,null,stFg);
+    }
+
+    for(let b=0;b<btnCount(d);b++){
+      const r=btnRect(i,b), isSw=(d.kind==='light'&&b>=4);
+      const dis=!d.avail||(isSw&&!d.ct);
+      // Slot 0 is OFF on both card kinds and takes the neutral highlight, not
+      // the accent. Mirrors drawDeviceCard().
+      const vis=dis?'disabled':(btnActive(d,b)?(b===0?'activeOff':'active'):'inactive');
+      if(d.kind==='climate'){
+        if(b===AC_BTN_TUP||b===AC_BTN_TDN) wStepBtn(r,b===AC_BTN_TUP,vis);
+        else if(b===AC_BTN_TEMP){
+          const known=d.known&&d.avail&&d.target!=null;
+          wValue(r,known?String(d.target):'--',known,
+                 (err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT),C.SURFACE);
+        }
+        else wChip(r,AC_LABEL[b],null,vis,`AC chip ${b}`);
+      }
+      else if(isSw) wSwatch(r.x+r.w/2,r.y+r.h/2,SW_R,b===4?C.WARM:C.COOL,vis);
+      else wChip(r,BULB_LABEL[b],BULB_LABEL_ALT[b],vis,`row ${i} chip ${b}`);
+      if(r.x+r.w-1>CARD_IN_X1) warn(`row ${i} slot ${b} runs past the card inner edge (${r.x+r.w-1} > ${CARD_IN_X1})`);
+    }
+  });
+}
+
+function drawSceneTile(slot,idx){
+  const x=sceneTileX(slot), y=sceneTileY(slot);
+  if(idx>=SCENE.length) return;   // empty slot: cleared, nothing drawn
+
+  const unavail=dev.slice(0,NUM_BULBS).some(d=>!d.known||!d.avail);
+  let fill,edge,fg,mono=true;
+  if(unavail){ fill=C.SURFACE; edge=C.SURFACE; fg=C.DISABLED; }
+  else if(isErr()){ fill=C.SURFACE; edge=C.ERROR; fg=C.ERROR; }
+  else if(sceneActive(idx)){ fill=tint(C.ACCENT); edge=C.ACCENT; fg=C.ACCENT; mono=false; }
+  else { fill=C.SURFACE; edge=C.BORDER; fg=C.TEXT2; mono=false; }
+
+  roundRect(x,y,SCENE_TILE_W,SCENE_TILE_H,R_LG,fill,edge);
+
+  const sc=SCENE[idx], cx=x+SCENE_TILE_W/2, py=y+SCENE_PIP_DY;
+  for(let i=0;i<NUM_BULBS;i++){
+    const px=cx+(i-1)*SCENE_PIP_GAP, b=sc.b[i];
+    if(!b.on){ disc(px,py,SCENE_PIP_R,null,mono?fg:C.DISABLED); continue; }
+    let c = mono ? fg
+          : !b.kelvin                 ? C.TEXT2
+          : b.kelvin<=KELVIN_WARM_MAX ? C.WARM : C.COOL;
+    if(!mono && b.pct<BRI_HIGH) c=mix(fill,c,(70+b.pct*185/100)/255);
+    disc(px,py,SCENE_PIP_R,c);
+  }
+  textFit('TITLE',sc.name,null,cx,y+SCENE_NAME_DY,SCENE_TILE_W-2*SP_2,fg,`scene "${sc.name}"`);
+
+  if(x+SCENE_TILE_W>SCENE_SB_X0) warn(`tile ${slot} reaches into the scroll gutter`);
+  if(y+SCENE_TILE_H>SCR_H)       warn(`tile ${slot} overflows the bottom (${y+SCENE_TILE_H}px)`);
+}
+
+function drawSceneScrollbar(){
+  const maxRow=sceneMaxRow();
+  if(maxRow===0) return;                       // empty gutter, dead to taps
+  const cx=SCENE_SB_X0+SCENE_SB_W/2, bot=SCR_H-1;
+  icoChevron(cx,ROWS_Y0+13,true, sceneRow===0     ?C.DISABLED:C.TEXT2,6,5);
+  icoChevron(cx,bot-13,   false, sceneRow>=maxRow ?C.DISABLED:C.TEXT2,6,5);
+
+  const tY=ROWS_Y0+SP_6, tH=(bot-SP_6)-tY;
+  g.fillStyle=C.DIVIDER; g.fillRect(cx,tY,1,tH);
+  let th=Math.floor(tH*SCENE_VIS_ROWS/sceneRowsN());
+  if(th<10) th=10;
+  roundRect(cx-2,tY+Math.floor((tH-th)*sceneRow/maxRow),5,th,2,C.ACCENT,null);
+}
+
+function drawScenes(){
+  const base=sceneRow*SCENE_COLS;
+  for(let slot=0;slot<SCENE_PER_PAGE;slot++) drawSceneTile(slot,base+slot);
+  drawSceneScrollbar();
+}
+
+function setToggleVal(r){
+  return r===SET_ROW_NIGHT?set.night : r===SET_ROW_SCHED?set.nightSched
+       : r===SET_ROW_FLIP ?set.flip  : false;
+}
+function setIcon(row,cx,cy){
+  if(row===SET_ROW_BRI)        icoSun(cx,cy,C.TEXT2);
+  else if(row===SET_ROW_NIGHT) icoMoon(cx,cy,C.TEXT2,C.SURFACE);
+  else if(row===SET_ROW_SCHED) icoClock(cx,cy,C.TEXT2);
+  else                         icoRotate(cx,cy,C.TEXT2);
+}
+function drawSettings(){
+  for(let r=0;r<SET_ROWS;r++){
+    const top=cardTop(r);
+    roundRect(CARD_X,top,CARD_W,CARD_H,R_LG,C.SURFACE,C.BORDER);
+    if(r===SET_ROW_BRI){
+      setIcon(r,CARD_ICO_CX,top+CARD_L1_CY);
+      gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+CARD_L1_CY,'left',C.TEXT);
+      gtext('BODY',BRI_LABEL[set.briIdx],CARD_IN_X1,top+CARD_L1_CY,'right',C.TEXT2);
+      for(let b=0;b<BRI_STEPS;b++){
+        const q=briRect(b);
+        wChip(q,BRI_LABEL[b],null,b===set.briIdx?'active':'inactive',`brightness ${b}`);
+        if(q.x+q.w-1>CARD_IN_X1) warn(`brightness ${b} runs past the card inner edge (${q.x+q.w-1} > ${CARD_IN_X1})`);
+      }
+    } else {
+      setIcon(r,CARD_ICO_CX,top+CARD_H/2);
+      gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+SET_TITLE_CY,'left',C.TEXT);
+      gtext('BODY',SET_CAPTION[r],CARD_TXT_X,top+SET_CAP_CY,'left',C.TEXT3);
+      const capW=textW('BODY',SET_CAPTION[r]);
+      if(CARD_TXT_X+capW>TOGGLE_X-SP_2)
+        warn(`settings ${r}: caption "${SET_CAPTION[r]}" reaches the toggle`);
+      wToggle(TOGGLE_X,top+TOGGLE_DY,TOGGLE_W,TOGGLE_H,setToggleVal(r));
+    }
+  }
 }
 
 function draw(){
-  clipWarnings=[];
-  g.fillStyle=C_BG; g.fillRect(0,0,SCR_W,SCR_H);
+  warnings=[];
+  applyTheme(set.night);
+  const ladder=checkNightLadder();
+  g.fillStyle=C.BG; g.fillRect(0,0,SCR_W,SCR_H);
 
-  // status bar
-  const dot=(x,ok,label)=>{
-    g.beginPath(); g.arc(x,STATUS_H/2,3,0,7); g.fillStyle=ok?C_GREEN:C_RED; g.fill();
-    font1(label,x+7,STATUS_H/2-4,ok?C_TEXT2:C_RED);
-  };
-  dot(10,true,'WIFI'); dot(60,haOk,'HA');
+  // header: glyph | tabs | clock, tiling the bar exactly
+  if(!wifiOk) icoWifi(STATUS_ICO_CX,STATUS_CY,0,C.ERROR,C.ERROR);
+  else {
+    icoWifi(STATUS_ICO_CX,STATUS_CY,3,C.TEXT3,C.DIVIDER);
+    if(!haOk) icoBadge(STATUS_ICO_CX+6,STATUS_CY-6,C.WARNING,C.BG);
+  }
+  // The cell is the clear rect in drawTab(), and handing it to wTab is what puts
+  // the underline on the last row above the rule.
+  for(let i=0;i<TAB_COUNT;i++)
+    wTab(TAB_X0+i*TAB_W,0,TAB_W,STATUS_DIV_Y,
+         TAB_LABEL[i], i===page?'active':'inactive');
+
   // 24h clock in Asia/Bangkok, matching the firmware's NTP + TZ_INFO="ICT-7"
-  const clk=new Date().toLocaleTimeString('en-GB',{timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'});
-  font1(clk, SCR_W-BTN_X0, STATUS_H/2-4, C_TEXT, 'right');
-  g.fillStyle=C_BORDER; g.fillRect(0,STATUS_H,SCR_W,1);
+  const clk=new Date().toLocaleTimeString('en-GB',
+              {timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'});
+  gtext('TITLE',clk,SCR_W-SP_2+2,STATUS_CY,'right',C.TEXT);
+  const clkW=textW('TITLE',clk), clkLeft=(SCR_W-SP_2+2)-clkW;
+  if(clkLeft < SCR_W-STATUS_CLK_W)
+    warn(`clock "${clk}" (${clkW}px) starts at x=${clkLeft}, inside tab 2's cell (region starts ${SCR_W-STATUS_CLK_W})`);
+  g.fillStyle=C.DIVIDER; g.fillRect(0,STATUS_DIV_Y,SCR_W,1);
 
-  dev.forEach((d,i)=>{
-    const top=rowTop(i);
-    if(i>0){ g.fillStyle=C_BORDER; g.fillRect(0,top-2,SCR_W,1); }
+  if(page===PAGE_SCENES)        drawScenes();
+  else if(page===PAGE_SETTINGS) drawSettings();
+  else                          drawDevices();
 
-    const nameW=font1(d.name,BTN_X0,top+ROW_LABEL_DY, stale?C_DIM:C_TEXT);
-    const st=stateText(d);
-    const stW=st.length*6;
-    font1(st,SCR_W-BTN_X0,top+ROW_LABEL_DY, !d.avail?C_RED:(stale?C_DIM:C_TEXT2),'right');
-    if(BTN_X0+nameW > SCR_W-BTN_X0-stW-4)
-      clipWarnings.push(`row ${i}: name+state overlap ("${d.name}" + "${st}")`);
+  // ── the same static_asserts screen.cpp makes ──
+  if(STATUS_ICO_W!==TAB_X0) warn('header: gap between the status glyph and the tabs');
+  if(TAB_X0+TAB_COUNT*TAB_W!==SCR_W-STATUS_CLK_W) warn('header: tabs and clock do not meet');
+  if(TAB_UL_Y+TAB_UL_H>STATUS_DIV_Y) warn('tab underline overruns the header divider');
+  if(STATUS_DIV_Y-TAB_UL_H!==TAB_UL_Y) warn('the tab cell does not seat the underline at TAB_UL_Y');
+  // Two things the compiler cannot see. The label's descenders must stop above the
+  // bar ("Settings" has a g), and the widest label plus its bleed must still fit
+  // the cell, or the bar would be clamped and stop tracking the word.
+  if(STATUS_CY+(ASC.BODY>>1)+DESC.BODY >= TAB_UL_Y)
+    warn(`tab label descenders reach y${STATUS_CY+(ASC.BODY>>1)+DESC.BODY}, underline starts y${TAB_UL_Y}`);
+  for(const t of TAB_LABEL){
+    if(textW('BODY',t)+2*TAB_UL_PAD > TAB_W)
+      warn(`tab "${t}" underline (${textW('BODY',t)+2*TAB_UL_PAD}px) is wider than its ${TAB_W}px cell`);
+    if(textW('BODY',t) > TAB_W-2*TAB_LBL_DX)
+      warn(`tab "${t}" (${textW('BODY',t)}px) exceeds its ${TAB_W-2*TAB_LBL_DX}px label budget`);
+  }
+  if(ROWS_Y0+NUM_DEVICES*ROW_H!==SCR_H)
+    warn(`rows do not fill the body (${ROWS_Y0+NUM_DEVICES*ROW_H} of ${SCR_H})`);
+  if(CARD_L1_Y+CARD_L1_H>CTL_DY) warn('card line 1 overlaps the control row');
+  if(CTL_DY+CTL_H>CARD_H) warn('control row overruns the card');
+  if(CARD_IN_X0+4*CHIP_PITCH-CHIP_GAP+2*SW_CELL_W!==CARD_IN_X1+1)
+    warn('bulb control row does not fill the card');
+  if(ACS_X0+2*ACS_BTN_W+ACS_VAL_W!==CARD_IN_X1+1)
+    warn('AC control row does not fill the card');
+  if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H!==SCR_H)
+    warn(`scene grid does not fill the body (${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H} of ${SCR_H})`);
+  if(SCENE_X0+(SCENE_COLS-1)*SCENE_PITCH_X+SCENE_TILE_W>SCENE_SB_X0)
+    warn('scene grid overlaps the scroll gutter');
+  // Descenders must stop before the control row, or a lowercase device name
+  // clips into the chips. This is why CARD_L1_CY is 9 and not 10.
+  if(CARD_L1_CY+(ASC.BODY>>1)+DESC.BODY >= CTL_DY)
+    warn(`card line 1 descenders reach y+${CARD_L1_CY+(ASC.BODY>>1)+DESC.BODY}, control row starts y+${CTL_DY}`);
+  if(CARD_L1_Y+CARD_L1_H < CARD_L1_CY+(ASC.BODY>>1)+DESC.BODY)
+    warn('card line 1 dirty rect does not cover its own descenders');
 
-    for(let b=0;b<btnCount(d);b++){
-      const r=btnRect(i,b), active=btnActive(d,b);
-      const dis=!d.avail || (b>=4 && d.kind==='light' && !d.ct);
-      if(d.kind==='climate')  drawTextButton(r,AC_LABEL[b],active,dis);
-      else if(b===4)          drawSwatch(r,C_WARM,KELVIN_WARM+'K',active,dis);
-      else if(b===5)          drawSwatch(r,C_COOL,KELVIN_COOL+'K',active,dis);
-      else                    drawTextButton(r,BULB_LABEL[b],active,dis);
-      if(r.x+r.w > SCR_W) clipWarnings.push(`row ${i} btn ${b} overflows right edge (${r.x+r.w}px)`);
-    }
-  });
-
-  const lastBottom=rowTop(3)+ROW_H;
-  let out=`rows end at y=${lastBottom} of ${SCR_H}\n`;
-  out+=`bulb btn right edge: ${BTN_X0+5*BTN_PITCH+BTN_W}px | AC: ${BTN_X0+4*AC_BTN_PITCH+AC_BTN_W}px\n`;
-  out+= clipWarnings.length
-      ? `<span class="warn">${clipWarnings.length} issue(s):\n  ${clipWarnings.join('\n  ')}</span>`
-      : `<span class="ok">no clipping or overflow detected</span>`;
+  let out=`<span class="hd">page</span> ${TAB_LABEL[page]}   `+
+          `<span class="hd">body</span> ${ROWS_Y0}..${ROWS_Y0+NUM_DEVICES*ROW_H-1}\n`;
+  out+=`header  glyph 0..${STATUS_ICO_W-1} | tabs ${TAB_X0}..${TAB_X0+TAB_COUNT*TAB_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
+  out+=`card    x ${CARD_X}..${CARD_X+CARD_W-1}, content ${CARD_IN_X0}..${CARD_IN_X1} (${CARD_IN_W}px)\n`;
+  out+=`bulb    chips ${CARD_IN_X0}..${CARD_IN_X0+4*CHIP_PITCH-CHIP_GAP-1} | swatches ${SW_X0}..${SW_X0+2*SW_CELL_W-1}\n`;
+  out+=`ac      chips ${CARD_IN_X0}..${ACS_X0-1} | stepper ${ACS_X0}..${ACS_X0+2*ACS_BTN_W+ACS_VAL_W-1}\n`;
+  out+=`scenes  ${SCENE.length} in ${sceneRowsN()} rows, showing ${sceneRow}..${sceneRow+SCENE_VIS_ROWS-1} of 0..${sceneMaxRow()}\n`;
+  out+=`        grid x ${SCENE_X0}..${sceneTileX(SCENE_COLS-1)+SCENE_TILE_W-1} | gutter ${SCENE_SB_X0}..${SCR_W-1} | y ${ROWS_Y0}..${sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H-1}\n`;
+  out+=`night   ${ladder}\n`;
+  out+= warnings.length
+      ? `<span class="warn">${warnings.length} issue(s):\n  ${warnings.join('\n  ')}</span>`
+      : `<span class="ok">no clipping, overflow, tiling or palette issues detected</span>`;
   log.innerHTML=out;
 }
 
+// ── hit test: mirrors screenHitTest() ────────────────────────────────────────
 cv.addEventListener('click',e=>{
   const r=cv.getBoundingClientRect();
-  const px=Math.floor((e.clientX-r.left)/S), py=Math.floor((e.clientY-r.top)/S);
-  if(py<ROWS_Y0) return;
+  let px=Math.floor((e.clientX-r.left)/S), py=Math.floor((e.clientY-r.top)/S);
+
+  // Mirrors handleTouch(): the 180 flip is applied to the TAP, not the panel.
+  if(set.flip){ px=SCR_W-1-px; py=SCR_H-1-py; }
+
+  // Tabs are the only live region above ROWS_Y0.
+  if(py<ROWS_Y0){
+    if(py<TAB_TAP_H && px>=TAB_X0 && px<TAB_X0+TAB_COUNT*TAB_W){
+      page=Math.floor((px-TAB_X0)/TAB_W); draw();
+    }
+    return;
+  }
+
+  if(page===PAGE_SCENES){
+    if(px>=SCENE_SB_X0){
+      const maxRow=sceneMaxRow();
+      if(maxRow===0) return;                 // dead region while all scenes fit
+      sceneRow = py<SCENE_SB_MID ? Math.max(0,sceneRow-SCENE_VIS_ROWS)
+                                 : Math.min(maxRow,sceneRow+SCENE_VIS_ROWS);
+      draw(); return;
+    }
+    const col=Math.floor((px-SCENE_X0)/SCENE_PITCH_X);
+    const vrow=Math.floor((py-ROWS_Y0)/SCENE_PITCH_Y);
+    if(col<0||col>=SCENE_COLS||vrow<0||vrow>=SCENE_VIS_ROWS) return;
+    const i=(sceneRow+vrow)*SCENE_COLS+col;
+    if(i>=SCENE.length) return;              // empty slot on the last page
+    for(let k=0;k<NUM_BULBS;k++){            // mirrors doScene()'s optimism
+      const w=SCENE[i].b[k];
+      dev[k].on=w.on;
+      if(w.on){ dev[k].pct=w.pct; if(w.kelvin>0&&dev[k].ct) dev[k].kelvin=w.kelvin; }
+    }
+    draw(); return;
+  }
+
+  if(page===PAGE_SETTINGS){
+    const rw=Math.floor((py-ROWS_Y0)/ROW_H);
+    if(rw<0||rw>=SET_ROWS) return;
+    if(rw===SET_ROW_BRI){
+      for(let b=0;b<BRI_STEPS;b++){
+        const q=briRect(b);
+        if(px>=q.x && px<q.x+q.w){ set.briIdx=b; draw(); return; }
+      }
+      return;
+    }
+    if(rw===SET_ROW_NIGHT) set.night=!set.night;
+    if(rw===SET_ROW_SCHED) set.nightSched=!set.nightSched;
+    if(rw===SET_ROW_FLIP)  set.flip=!set.flip;
+    draw(); return;
+  }
+
   const i=Math.floor((py-ROWS_Y0)/ROW_H);
   if(i<0||i>=dev.length) return;
   const d=dev[i];
   for(let b=0;b<btnCount(d);b++){
+    // The AC setpoint cell is a readout: a tap there is a deliberate miss.
+    if(d.kind==='climate' && b===AC_BTN_TEMP) continue;
     const q=btnRect(i,b);
-    // vertical band = whole row, matching screenHitTest()
-    if(px>=q.x && px<q.x+q.w && py>=rowTop(i) && py<rowTop(i)+ROW_H){
+    if(px>=q.x && px<q.x+q.w){       // vertical band = whole row
       if(d.kind==='climate'){
         if(b===0) d.mode='off'; else if(b===1) d.mode='cool';
         else if(b===2) d.mode='dry';
-        else d.target+= (b===3?1:-1);
+        else d.target += (b===AC_BTN_TUP?1:-1);
       } else {
         if(b===0) d.on=false;
         else if(b===1){d.on=true;d.pct=BRI_LOW;}
@@ -257,5 +855,24 @@ cv.addEventListener('click',e=>{
   }
 });
 
+// Deep-link a state, so a particular case can be reopened (or screenshotted)
+// without clicking back to it:
+//   ?page=0|1|2  &night=1  &scenes=24  &stale=1  &ha=0  &wifi=0  &bri=4
+//   &name=Bedside+reading+lamp  &mode=heat  &avail=0  &ct=0
+const Q=new URLSearchParams(location.search);
+if(Q.has('scenes')) sceneStress(Math.max(0,+Q.get('scenes')-SCENE_BASE.length));
+if(Q.has('page'))   page=Math.max(0,Math.min(2,+Q.get('page')));
+if(Q.has('night'))  set.night=Q.get('night')!=='0';
+if(Q.has('flip'))   set.flip=Q.get('flip')!=='0';
+if(Q.has('bri'))    set.briIdx=Math.max(0,Math.min(BRI_STEPS-1,+Q.get('bri')));
+if(Q.has('stale'))  stale=Q.get('stale')!=='0';
+if(Q.has('ha'))     haOk=Q.get('ha')!=='0';
+if(Q.has('wifi'))   wifiOk=Q.get('wifi')!=='0';
+if(Q.has('name'))   dev[0].name=Q.get('name');
+if(Q.has('mode'))   dev[3].mode=Q.get('mode');
+if(Q.has('avail'))  dev[1].avail=Q.get('avail')!=='0';
+if(Q.has('ct'))     dev[2].ct=Q.get('ct')!=='0';
+
 draw();
+setInterval(()=>{ if(!isErr()) draw(); },20000);   // keep the clock live
 </script>

@@ -9,6 +9,7 @@
 // unit. Two hard-won constraints live in there — see readTouch().
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <XPT2046_Bitbang.h>
@@ -21,6 +22,8 @@
 #include "ui/screen.h"
 
 AppState S;
+
+static const uint8_t BRI_DUTY[BRI_STEPS] = BRI_DUTY_LIST;
 
 // Software-SPI XPT2046 on the dedicated CYD touch pins. Used only for its
 // begin()/setCalibration() pin setup — reads go through xptRead() below.
@@ -134,6 +137,102 @@ static bool readTouch(int16_t& sx, int16_t& sy,
   return true;
 }
 
+// ── settings / backlight / night mode ────────────────────
+
+static Preferences prefs;
+
+// Four keys, all uint8_t, clamped on load. Small enough that a RowMeta table
+// (as ../btc-cyd-v2 uses for its thirteen) would cost more than it saves.
+#define K_BRI   "s.bri"
+#define K_NIGHT "s.nit"
+#define K_SCHED "s.nsch"
+#define K_FLIP  "s.flip"
+
+static void settingsLoad() {
+  if (!prefs.begin(NVS_NAMESPACE, false)) {
+    // Never hang on this — the device is still fully usable on defaults, and
+    // putUChar() no-ops when the namespace failed to open, so saves fail soft.
+    Serial.println("nvs: open failed, running on defaults");
+    return;
+  }
+  uint8_t bri = prefs.getUChar(K_BRI, BRI_DEFAULT);
+  S.set.briIdx     = (bri < BRI_STEPS) ? bri : BRI_DEFAULT;   // clamp corrupt
+  S.set.night      = prefs.getUChar(K_NIGHT, 0) != 0;
+  S.set.nightSched = prefs.getUChar(K_SCHED, 1) != 0;
+  S.set.flip       = prefs.getUChar(K_FLIP,  0) != 0;
+  Serial.printf("settings: bri=%u/%u (duty %u) night=%d sched=%d flip=%d\n",
+                S.set.briIdx, BRI_STEPS - 1, BRI_DUTY[S.set.briIdx],
+                S.set.night, S.set.nightSched, S.set.flip);
+}
+
+// Only a user tap persists. Scheduled night transitions deliberately do not:
+// the boot-time window adoption in serviceNightSchedule() already restores the
+// right state, so writing twice a day forever would buy nothing.
+static void settingsSave(const char* key, uint8_t val) {
+  prefs.putUChar(key, val);
+}
+
+// Rewriting the LEDC duty every frame visibly glitches CYD backlights, so only
+// push it when it actually changes. Seeded 0xFF so the first call always
+// writes — including the boot seed, which must go through here or the memo
+// desyncs from the panel.
+static void applyBacklight(uint8_t duty) {
+  static uint8_t last = 0xFF;
+  if (duty == last) return;
+  last = duty;
+  ledcWrite(BL_CHANNEL, duty);
+}
+
+// Palette, rotation and backlight, all memoised no-ops when nothing changed —
+// so this is ~3 compares at 50 Hz. Effective duty is computed HERE rather than
+// in the tap handler, which is what makes a brightness change picked while
+// night mode is dimming still land the moment night ends.
+static void applySettings() {
+  screenSetNight(S.set.night);
+  screenSetFlip(S.set.flip);
+  applyBacklight(BRI_DUTY[S.set.night ? BRI_NIGHT : S.set.briIdx]);
+}
+
+// The schedule WRITES the Night mode toggle at its two boundaries rather than
+// overriding it. Edge-triggered, so between the boundaries a manual toggle
+// always wins and sticks — a level-triggered version would re-assert itself on
+// the next render and make the toggle physically un-turn-off-able before 08:00.
+static void serviceNightSchedule() {
+  static int16_t lastMin = -1;
+
+  // Reset so re-enabling the schedule re-adopts the current window rather than
+  // waiting up to a day for the next boundary.
+  if (!S.set.nightSched) { lastMin = -1; return; }
+
+  struct tm t;
+  // Zero timeout: this runs every loop pass and must never block. Returns false
+  // until SNTP lands, and an unsynced clock must never be read as midnight.
+  if (!getLocalTime(&t, 0)) return;
+
+  int16_t m = (int16_t)(t.tm_hour * 60 + t.tm_min);
+  if (m == lastMin) return;
+
+  if (lastMin < 0) {
+    // First valid clock reading, or the schedule was just re-enabled: adopt the
+    // window. This is what makes a 02:00 reboot come up already in night mode.
+    S.set.night = (m >= NIGHT_ON_MIN || m < NIGHT_OFF_MIN);
+    Serial.printf("night: adopting window at %02d:%02d -> %d\n",
+                  t.tm_hour, t.tm_min, S.set.night);
+  } else {
+    // The `lastMin < B && m > B` half catches a boundary missed because a
+    // blocking HTTP call held loop() across the minute. Neither clause misfires
+    // at the midnight wrap, where lastMin is 1439 and m is 0.
+    if (m == NIGHT_ON_MIN  || (lastMin < NIGHT_ON_MIN  && m > NIGHT_ON_MIN)) {
+      S.set.night = true;
+      Serial.println("night: schedule on");
+    } else if (m == NIGHT_OFF_MIN || (lastMin < NIGHT_OFF_MIN && m > NIGHT_OFF_MIN)) {
+      S.set.night = false;
+      Serial.println("night: schedule off");
+    }
+  }
+  lastMin = m;
+}
+
 // ── HA poll scheduling ───────────────────────────────────
 // All four devices refresh together in one templated request every HA_POLL_MS,
 // so every device is at most HA_POLL_MS stale. The previous round-robin left
@@ -190,7 +289,7 @@ enum ActKind : uint8_t { ACT_NONE, ACT_L_OFF, ACT_L_BRI, ACT_L_KELVIN,
 // Applies the expected result locally and repaints BEFORE the HTTP call, then
 // reverts if the call failed. IKEA Zigbee round-trips run 1-2s; without this
 // optimistic step every tap would feel like the screen had ignored it.
-static void doAction(int8_t devIdx, int8_t btn) {
+static void doAction(int16_t devIdx, int8_t btn) {
   DeviceState& d = S.dev[devIdx];
 
   // Fail fast while the breaker is open. Every HA call blocks the loop, so
@@ -214,19 +313,23 @@ static void doAction(int8_t devIdx, int8_t btn) {
       case 0: kind = ACT_C_MODE; sArg = "off";        break;
       case 1: kind = ACT_C_MODE; sArg = AC_MODE_COOL; break;
       case 2: kind = ACT_C_MODE; sArg = AC_MODE_DRY;  break;
-      case 3:
-      case 4: {
-        // T+/T- are relative, so they cannot act until a real setpoint is known
+      // AC_BTN_TEMP (the slot between these two) is the setpoint READOUT and
+      // falls through to `default: return`. screenHitTest() already reports a
+      // tap there as a miss, so this is belt and braces.
+      case AC_BTN_TUP:
+      case AC_BTN_TDN: {
+        // The steps are relative, so they cannot act until a real setpoint is
+        // known — the same rule that makes the readout show "--" until then.
         if (!d.known || isnan(d.target)) {
           d.errMs = millis();
-          Serial.println("ac: no setpoint known yet, ignoring T+/T-");
+          Serial.println("ac: no setpoint known yet, ignoring step");
           return;
         }
-        float t = d.target + (btn == 3 ? d.tStep : -d.tStep);
+        float t = d.target + (btn == AC_BTN_TUP ? d.tStep : -d.tStep);
         if (t < d.tMin) t = d.tMin;
         if (t > d.tMax) t = d.tMax;
         // Already at the limit. Flash the row instead of returning silently:
-        // six consecutive T+ taps at max once produced no feedback whatsoever,
+        // six consecutive up-taps at max once produced no feedback whatsoever,
         // which reads as "the tap missed" rather than "you are at 31". Compared
         // with an epsilon because these are floats off a /10 division.
         if (fabsf(t - d.target) < 0.01f) {
@@ -288,6 +391,101 @@ static void doAction(int8_t devIdx, int8_t btn) {
   }
 }
 
+// ── scenes ───────────────────────────────────────────────
+// Same optimistic ordering as doAction(), but over three devices at once. The
+// call set is DERIVED from the scene table rather than special-cased per scene,
+// so editing the table cannot desync it: one turn_off for the bulbs the scene
+// wants dark, one turn_on for the rest.
+static void doScene(int16_t idx) {
+  // The table in screen.cpp owns the count, so ask rather than assume one.
+  if (idx < 0 || (uint16_t)idx >= sceneCount()) return;
+
+  if (haBreakerOpen()) {
+    // No single row owns a scene, so flash all three — that is what the card's
+    // error state reads off.
+    for (uint8_t i = 0; i < NUM_BULBS; i++) S.dev[i].errMs = millis();
+    Serial.println("ha: breaker open, skipping scene");
+    return;
+  }
+
+  // doAction() saves ONE `before`; a scene mutates three, and a partial failure
+  // must restore the exact pre-tap state of every bulb. ~204 B of loop stack.
+  DeviceState before[NUM_BULBS];
+  for (uint8_t i = 0; i < NUM_BULBS; i++) before[i] = S.dev[i];
+
+  uint8_t offMask, onMask;
+  int onPct, onK;
+  scenePlan((uint16_t)idx, offMask, onMask, onPct, onK);
+
+  // 1. optimistic, all three at once
+  for (uint8_t i = 0; i < NUM_BULBS; i++) {
+    DeviceState& d = S.dev[i];
+    if (onMask & (1u << i)) {
+      d.on  = true;
+      d.pct = onPct;
+      if (onK > 0 && d.supportsCT) d.kelvin = onK;
+    } else {
+      d.on = false;
+    }
+  }
+  screenRender();
+
+  // 2. fire, dark bulbs first so a lights-up transition never flashes every
+  //    bulb on and then back off. Each call blocks loop() for up to
+  //    HTTP_READ_SVC_MS, so RELAX's two are the longest freeze in the firmware.
+  //    Skip the second once the first has hard-failed: haPostService() does not
+  //    consult the breaker, so we would pay another full timeout for a scene we
+  //    are about to roll back wholesale.
+  bool okOff = true, okOn = true;
+  if (offMask) okOff = haLightsOff(offMask);
+  if (onMask)  okOn  = okOff && haLightsOn(onMask, onPct, onK);
+
+  // 3. RELAX can half-succeed and nothing here can tell which bulbs moved, so
+  //    roll back to the last OBSERVED state rather than invent a mixed one —
+  //    and schedule the reconcile ANYWAY. Unlike doAction(), where a failed
+  //    call means nothing changed, a partial scene failure means HA's truth now
+  //    differs from both the guess and the rollback; only a poll can settle it.
+  if (!(okOff && okOn)) {
+    for (uint8_t i = 0; i < NUM_BULBS; i++) {
+      S.dev[i] = before[i];
+      S.dev[i].errMs = millis();
+    }
+  }
+  reconcilePend = true;
+  reconcileAtMs = millis() + RECONCILE_MS;
+}
+
+// ── settings ─────────────────────────────────────────────
+// Local only — no HA call, so no optimistic/rollback dance. applySettings()
+// must run BEFORE the repaint: a flip or night change alters the rotation and
+// palette the frame is drawn in, and doing it after would paint one frame in
+// the old one and immediately wipe it.
+static void doSetting(int16_t row, int8_t sub) {
+  switch (row) {
+    case SET_ROW_BRI:
+      if (sub < 0 || sub >= BRI_STEPS) return;
+      if (S.set.briIdx == (uint8_t)sub) return;
+      S.set.briIdx = (uint8_t)sub;
+      settingsSave(K_BRI, S.set.briIdx);
+      break;
+    case SET_ROW_NIGHT:
+      S.set.night = !S.set.night;
+      settingsSave(K_NIGHT, S.set.night);
+      break;
+    case SET_ROW_SCHED:
+      S.set.nightSched = !S.set.nightSched;
+      settingsSave(K_SCHED, S.set.nightSched);
+      break;
+    case SET_ROW_FLIP:
+      S.set.flip = !S.set.flip;
+      settingsSave(K_FLIP, S.set.flip);
+      break;
+    default: return;
+  }
+  applySettings();
+  screenRender();
+}
+
 // ── touch ────────────────────────────────────────────────
 
 static void handleTouch() {
@@ -303,6 +501,22 @@ static void handleTouch() {
   int16_t  x = -1, y = -1;
   uint16_t rx = 0, ry = 0, rz = 0;
   bool ok = readTouch(x, y, &rx, &ry, &rz);
+
+#if !CALIB_MODE
+  // The 180 flip never reaches the XPT2046 — the digitiser is physically fixed,
+  // so readTouch() still returns coordinates in the rotation-1 frame its
+  // TOUCH_* constants were fitted against. Mirror both axes to reach the frame
+  // that is actually on screen. Exactly equivalent to toggling TOUCH_INVERT_X
+  // and TOUCH_INVERT_Y together, which is what 180 means for a
+  // landscape-to-landscape rotation (no axis swap; both are 320x240).
+  //
+  // Deliberately here and not in readTouch(): that stays a pure
+  // raw-to-calibration-frame mapper, the calibration paths bypass this for
+  // free, and the `touch dbg:` line below then logs the coordinates that were
+  // actually hit-tested — the only in-situ diagnostic for this.
+  if (ok && S.set.flip) { x = (SCR_W - 1) - x; y = (SCR_H - 1) - y; }
+#endif
+
   bool irqLow = digitalRead(PIN_TOUCH_IRQ) == LOW;
   uint32_t now = millis();
 
@@ -340,15 +554,53 @@ static void handleTouch() {
   wasDown = true;
   lastTap = now;
 
-  int8_t dev = -1, btn = -1;
-  if (!screenHitTest(x, y, dev, btn)) return;
+  Hit h = screenHitTest(x, y);
+  if (h.kind == HIT_NONE) return;
 
-  S.pressDev = dev;
-  S.pressBtn = btn;
-  S.pressMs  = now;
-  Serial.printf("tap: %s btn %d\n", S.dev[dev].name, (int)btn);
+  S.pressKind = h.kind;
+  S.pressIdx  = h.idx;
+  S.pressSub  = h.sub;
+  S.pressMs   = now;
 
-  doAction(dev, btn);
+  switch (h.kind) {
+    case HIT_TAB:
+      Serial.printf("tap: tab %d\n", (int)h.idx);
+      // handleTouch() runs before screenRender() in loop(), so the new page
+      // paints on this same pass — no extra render call needed.
+      S.page = (PageId)h.idx;
+      break;
+
+    case HIT_ROW:
+      // MUST stay inside this branch. Unconditional, as it used to be, a scene
+      // tap at index 4 would evaluate S.dev[4].name — one past a 4-element
+      // array, landing in AppState's scalars, which printf then dereferences as
+      // a char*. That is a LoadProhibited panic and a reboot, not a wrong name.
+      Serial.printf("tap: %s btn %d\n", S.dev[h.idx].name, (int)h.sub);
+      doAction(h.idx, h.sub);
+      break;
+
+    case HIT_SCENE:
+      Serial.printf("tap: scene %d %s\n", (int)h.idx, sceneName((uint16_t)h.idx));
+      doScene(h.idx);
+      break;
+
+    case HIT_SCROLL:
+      // A page per tap, not a row: at three visible rows a row-at-a-time arrow
+      // would need 23 taps to cross a 100-scene list. sceneScrollBy() clamps, so
+      // the last page shows the tail rather than a screen of empty slots. No
+      // repaint call needed — drawScenes() notices the offset moved.
+      Serial.printf("tap: scene scroll %+d\n", (int)h.idx);
+      sceneScrollBy((int16_t)(h.idx * SCENE_VIS_ROWS));
+      break;
+
+    case HIT_SETTING:
+      Serial.printf("tap: setting %d/%d\n", (int)h.idx, (int)h.sub);
+      doSetting(h.idx, h.sub);
+      break;
+
+    default:
+      break;
+  }
 }
 
 // ── networking ───────────────────────────────────────────
@@ -378,8 +630,13 @@ static void setupWifi() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_CONNECT_MS)
+    // Tick the splash's progress pips while we block here. Three fillCircles at
+    // 5 Hz, and it is the difference between "connecting" and "hung".
+    for (uint8_t ph = 0;
+         WiFi.status() != WL_CONNECTED && millis() - t0 < WIFI_CONNECT_MS; ph++) {
+      screenSplashProgress(ph);
       delay(200);
+    }
   }
 
   if (WiFi.status() != WL_CONNECTED) {
@@ -541,10 +798,11 @@ static void calibRun() {
       sx = constrain(sx, 0, SCR_W - 1);
       sy = constrain(sy, 0, SCR_H - 1);
 
-      int8_t dv = -1, bt = -1;
-      bool hit = screenHitTest(sx, sy, dv, bt);
+      Hit h = screenHitTest(sx, sy);
       Serial.printf("verify: raw=%u,%u -> %d,%d  %s\n", ax, ay, sx, sy,
-                    hit ? (String("row ") + dv + " btn " + bt).c_str() : "(no button)");
+                    h.kind == HIT_ROW ? (String("row ") + h.idx + " btn " + h.sub).c_str()
+                  : h.kind == HIT_TAB ? (String("tab ") + h.idx).c_str()
+                  : "(no button)");
       screenCalibDot(sx, sy);
       while (calDown(a, b, z)) delay(20);
     }
@@ -588,19 +846,35 @@ void setup() {
                 PIN_TOUCH_MOSI, PIN_TOUCH_MISO, PIN_TOUCH_CLK,
                 PIN_TOUCH_CS, PIN_TOUCH_IRQ);
 
+  // Before screenBegin(): `flip` decides the rotation of the one and only
+  // first paint, and briIdx the first backlight duty. Costs ~15ms and touches
+  // no network, so it is safe this early.
+  settingsLoad();
+
+#if CALIB_MODE
+  // Calibration DEFINES the reference frame, so it must run at rotation 1, full
+  // brightness and day colours — the TOUCH_* block it prints is meaningless
+  // otherwise, and a 1% red crosshair cannot be aimed at. Forcing the values
+  // here rather than adding conditionals downstream keeps every consumer right.
+  S.set.flip = false; S.set.night = false; S.set.nightSched = false;
+  S.set.briIdx = BRI_STEPS - 1;
+#endif
+
   // initDevices() first: the calibration verify pass calls screenHitTest(),
   // which reads each row's kind to pick the right button widths.
   initDevices();
-  screenBegin();
+  screenBegin(S.set.flip);
 
   // MUST come after screenBegin(): TFT_eSPI::init() does
   //   pinMode(TFT_BL, OUTPUT); digitalWrite(TFT_BL, TFT_BACKLIGHT_ON);
   // (TFT_eSPI.cpp:786) which reclaims GPIO 21 as a plain output and detaches
   // any PWM already attached to it. Configuring LEDC first — as this used to —
-  // left BL_DUTY silently ignored and the backlight pinned at 100%.
+  // left the duty silently ignored and the backlight pinned at 100%.
   ledcSetup(BL_CHANNEL, 5000, 8);
   ledcAttachPin(PIN_BACKLIGHT, BL_CHANNEL);
-  ledcWrite(BL_CHANNEL, BL_DUTY);
+  // Seeds all three memoised effects through the same path that maintains
+  // them, so nothing can desync from the panel.
+  applySettings();
 
 #if CALIB_MODE
   calibRun();          // never returns; no Wi-Fi or HA in calibration mode
@@ -613,6 +887,10 @@ void setup() {
 void loop() {
   updateNetState();
   if (S.netState == 1) servicePoll();
+  // Before handleTouch() so a scheduled flip lands before the tap that follows
+  // it is mapped. All four calls are memoised no-ops when nothing changed.
+  serviceNightSchedule();
+  applySettings();
   handleTouch();
   screenRender();
   logClockOnce();

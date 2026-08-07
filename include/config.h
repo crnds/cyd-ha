@@ -35,7 +35,7 @@
 // Service calls are a different workload: light.* is local Zigbee and fast, but
 // climate.* goes out to the Sensibo cloud. Measured REAL changes at 1135-1643 ms
 // (a no-op write short-circuits in 24 ms, which is what misled the first tuning
-// pass into 1500 and made every genuine T+/T- report a read timeout).
+// pass into 1500 and made every genuine setpoint step report a read timeout).
 #define HTTP_READ_SVC_MS   2500
 
 // Circuit breaker: after a failed call, don't let further taps each pay another
@@ -114,34 +114,258 @@
 
 // ── Backlight ────────────────────────────────────────────
 #define BL_CHANNEL     0
-// Fixed brightness, 0-255. 120 is ~47% — chosen for a bedroom, where a 90%
-// panel is glaring at night. Only takes effect because the LEDC setup in
-// setup() runs AFTER screenBegin(); see the comment there before moving it.
-#define BL_DUTY        120
+// Brightness is a setting now (Settings page, persisted in NVS) rather than a
+// fixed #define. Duty and label share one index (Settings::briIdx), so they are
+// declared together — splitting them across translation units is how they
+// drift. 1 / 25 / 50 / 75 / 100 % of 255.
+#define BRI_STEPS      5
+#define BRI_DUTY_LIST  { 3, 64, 128, 191, 255 }
+#define BRI_LABEL_LIST { "1%", "25%", "50%", "75%", "100%" }
+// Default index. 128 is the nearest step to the old fixed BL_DUTY of 120
+// (~47%) — chosen for a bedroom, where a 90% panel is glaring at night.
+#define BRI_DEFAULT    2
+// Night mode forces this step regardless of briIdx, then restores the user's
+// choice when night ends.
+#define BRI_NIGHT      0
+
+// ── Night mode ───────────────────────────────────────────
+// The schedule WRITES the Night mode toggle at these boundaries rather than
+// overriding it: between them a manual toggle always wins and sticks until the
+// next edge. Minutes since local midnight.
+#define NIGHT_ON_MIN   (23 * 60 + 45)     // 23:45
+#define NIGHT_OFF_MIN  (8 * 60)           // 08:00
+
+// ── Persistence ──────────────────────────────────────────
+// NVS namespace for the Settings page. Shares the 20 KB nvs partition with
+// WiFiManager's own credential store (a separate namespace).
+#define NVS_NAMESPACE  "cydha"
 
 // ── Layout (320x240 landscape) ───────────────────────────
+// GEOMETRY TOKENS — the other half of the design system. Colour and type live
+// in src/ui/theme.h and src/ui/gfx.h; every margin, gap, size and radius lives
+// here, and simulator.html mirrors this block. Nothing in screen.cpp computes a
+// position from a literal: change the #defines together, not the arithmetic.
 #define SCR_W          320
 #define SCR_H          240
-#define STATUS_H       18                 // status bar occupies y 0..17
-#define ROWS_Y0        20                 // first device row top
-#define ROW_H          55                 // 4 * 55 = 220; 20 + 220 = 240 exactly
-#define ROW_LABEL_DY   1                  // name/state line offset within row
-#define ROW_BTN_DY     15                 // button strip offset within row
-#define BTN_H          36                 // >= 30px comfortable finger target
 
-// Bulb rows: 6 buttons. 6 + 5*52 = 266, + 48 = 314 (6px right margin).
-#define BTN_X0         6
-#define BTN_W          48
-#define BTN_GAP        4
-#define BTN_PITCH      (BTN_W + BTN_GAP)  // 52
+// SPACING SCALE. Every gap and pad in the UI is one of these five values, which
+// is what makes the layout read as deliberate rather than nudged. Anything that
+// needs a sixth value is a sign the layout is wrong, not that the scale is.
+#define SP_1           4
+#define SP_2           8
+#define SP_3           12
+#define SP_4           16
+#define SP_6           24
 
-// AC row: 5 buttons. 6 + 4*62 = 254, + 58 = 312 (8px right margin).
-#define AC_BTN_W       58
-#define AC_BTN_PITCH   (AC_BTN_W + BTN_GAP)  // 62
+// CORNER RADII. Two steps and a pill, applied by role and never mixed within
+// one: containers get R_LG, controls that sit on them get R_SM, and anything
+// whose height defines its shape (the settings toggle) is a pill at h/2. The tab
+// strip used to be in that last group and no longer draws a shape at all.
+#define R_SM           6                  // chips, small controls
+#define R_LG           8                  // cards, scene tiles
+
+// ── header (y 0..31) ─────────────────────────────────────
+// 32px, up from 22. The tab targets grew 24 -> 32px with it, which matters
+// because the 4-point touch fit EXTRAPOLATES above y=30 (CAL_INSET is 30) and
+// resistive panels are worst near the bezel: this is still the least accurate
+// band on the panel, so it gets the most height per target of anything here.
+//
+// Three regions that TILE THE BAR EXACTLY (26 + 3*81 + 51 = 320). A gap leaves
+// pixels nothing ever clears; an overlap is just as bad, since each region only
+// clears its own rect, so whatever spills over is never repainted.
+#define STATUS_H       32
+#define STATUS_ICO_W   26                 // x   0..25  — one connectivity glyph
+#define TAB_X0         26
+#define TAB_W          81                 // x  26..268 — TAB_COUNT * TAB_W
+#define TAB_COUNT      3                  // static_assert'd against PAGE_COUNT
+#define STATUS_CLK_W   51                 // x 269..319 — 24h clock
+// Content sits above the divider, so every header clear is STATUS_DIV_Y tall and
+// the 1px rule at the bottom survives them all and is painted once.
+#define STATUS_DIV_Y   (STATUS_H - 1)     // 31
+#define STATUS_CY      15                 // header content centre line
+#define STATUS_ICO_CX  13
+// Tab indicator: a 2px underline SEATED ON the header rule, not a pill. The
+// filled pill made the three tabs the most button-like things on the panel,
+// competing with the 23 controls in the body that actually are buttons — and it
+// used the same solid-accent fill that means "selected" on a chip, so the header
+// read as a fourth row of controls. An underline says "you are here" and nothing
+// about being pressable, which is what the header is for.
+//
+// TAB_UL_Y + TAB_UL_H lands exactly on STATUS_DIV_Y, so the bar stacks directly
+// on the 1px rule and the two read as one line: a 1px gap between them would
+// look like a misprint. It must also stay at or above STATUS_DIV_Y because every
+// header clear is exactly that tall — the rule below is painted once and must
+// survive, while the indicator has to be inside a rect that gets cleared, or a
+// tab that stops being current would keep its bar forever.
+//
+// 2px and not 3: the label centres on STATUS_CY in F_BODY, so its descenders
+// ("Settings" has a g) reach y 26, and a 3px bar would leave them one pixel of
+// air. simulator.html asserts that clearance rather than trusting this comment.
+//
+// The label budget is now the whole cell less SP_1 a side (73px) instead of the
+// pill's 65px, so nothing here is close to a fit failure any more — but TAB_W
+// stays 81, since it is fixed by the header tiling above, not by the widest word.
+#define TAB_UL_H       2
+#define TAB_UL_Y       (STATUS_DIV_Y - TAB_UL_H)     // 29..30
+#define TAB_UL_PAD     2                             // bleed each side of label
+#define TAB_LBL_DX     SP_1
+#define TAB_TAP_H      STATUS_H
+
+// ── body (y 32..239) ─────────────────────────────────────
+// 4 row bands of 52 tile the body EXACTLY: 32 + 4*52 = 240. Devices and
+// Settings both use this grid via rowTop(); a leftover sliver at the bottom is
+// the failure this arithmetic exists to prevent.
+#define ROWS_Y0        32
+#define ROW_H          52
+
+// Each band holds one CARD inset by SP_1 top and bottom, which is what produces
+// the uniform 6px gutter between cards (3 + 3) and 3px against the header and
+// the bottom edge. Grouping the row's contents into a surface — instead of
+// separating them with a hairline — is the single biggest reason the page reads
+// as calm: a card says "these things belong together" without drawing a line.
+#define CARD_DY        3
+#define CARD_H         (ROW_H - 2 * CARD_DY)         // 46
+#define CARD_X         SP_2                          // 8
+#define CARD_W         (SCR_W - 2 * SP_2)            // 304 -> x 8..311
+#define CARD_PAD       SP_2                          // inner padding
+// X1 is the LAST content pixel, not one past it, so a right-aligned datum can
+// use it directly. Width is derived from the padding rather than from X1 - X0 to
+// keep the off-by-one in one place.
+#define CARD_IN_X0     (CARD_X + CARD_PAD)               // 16  — first content px
+#define CARD_IN_X1     (CARD_X + CARD_W - CARD_PAD - 1)  // 303 — last content px
+#define CARD_IN_W      (CARD_W - 2 * CARD_PAD)           // 288
+
+// Card internals, as offsets from the card top. Line 1 is identity + live state,
+// line 2 is the controls: 3 pad + 14 line1 + 4 gap + 22 controls + 3 pad = 46.
+// CARD_L1_CY is 9 rather than 10 so that a lowercase name's descenders (5px
+// below the 13px ascent box an MC datum centres) stop at y+20, exactly one pixel
+// above the control row — a name is user data from secrets.h, so it cannot be
+// assumed to be the all-caps it happens to be today.
+#define CARD_L1_CY     9                  // identity / state line, MC datum
+// The dirty rect for that line. It runs to y+20 — past the 13px ascent box the
+// datum centres — because it MUST cover descenders: clear only the ascent box
+// and renaming "Reading lamp" to "Lamp" leaves the g's tail on the card forever.
+// It also starts at CARD_IN_X0 rather than CARD_X, which keeps every clear clear
+// of the R_LG corner arcs; filling those with the surface colour would square
+// the card's corners off one repaint at a time.
+#define CARD_L1_Y      2
+#define CARD_L1_H      19                 // y+2..y+20, ending just above CTL_DY
+#define CARD_ICO_CX    (CARD_X + 15)      // 23 — status icon centre
+#define CARD_ICO_R     7                  // 14px optical icon box
+#define CARD_TXT_X     (CARD_X + 28)      // 36 — text starts clear of the icon
+#define CTL_DY         21                 // control row top
+#define CTL_H          22                 // control row height
+
+// CHIP GRID — 4 across a device card, 5 across the brightness card, one pitch.
+// 4*54 + 3*4 = 228 (x 16..243); 5*54 + 4*4 = 286 (x 16..301).
+#define CHIP_W         54
+#define CHIP_GAP       SP_1
+#define CHIP_PITCH     (CHIP_W + CHIP_GAP)           // 58
+
+// The two colour-temperature swatches fill the rest of a bulb card's control
+// row exactly: 228 + 2*30 = 288 = CARD_IN_W + 1. Circles rather than labelled
+// buttons — the bulbs are white-spectrum, so the control IS its colour, and a
+// "2202K" caption in a 22px control was unreadable anyway. The value still
+// appears, live and authoritative, on the card's state line.
+#define SW_X0          (CARD_IN_X0 + 4 * CHIP_PITCH - CHIP_GAP)   // 244
+#define SW_CELL_W      30                 // tap cell; the circle is smaller
+#define SW_R           11
+
+// AC card: 3 mode chips then the setpoint stepper, tiling the same 288px.
+// 3*60 + 2*4 = 188 (x 16..203), then 28 + 44 + 28 = 100 (x 204..303).
+// Mode chips are 60 not 54 because "COOL" needs 51px of the 52 a 60px chip
+// leaves — the one place a label decides a width rather than the reverse.
+#define ACM_W          60
+#define ACM_PITCH      (ACM_W + CHIP_GAP)            // 64
+#define ACS_X0         (CARD_IN_X0 + 3 * ACM_PITCH - CHIP_GAP)    // 204
+#define ACS_BTN_W      28                 // one chevron
+#define ACS_VAL_W      44                 // the readout between them
+
+// ── Settings page ────────────────────────────────────────
+// 4 cards on the same row grid. Row 0 is a discrete slider (5 chips); rows 1..3
+// are a list of toggles.
+#define SET_ROWS       4
+#define SET_ROW_BRI    0                  // 5 chips on the shared chip pitch
+#define SET_ROW_NIGHT  1                  // toggle
+#define SET_ROW_SCHED  2                  // toggle
+#define SET_ROW_FLIP   3                  // toggle
+// Title + caption stacked and vertically centred in the 46px card: content is
+// 13 + 4 + 13 = 30, so it starts 8 down and the captions' descenders land 3px
+// clear of the bottom.
+#define SET_TITLE_CY   14
+#define SET_CAP_CY     31
+#define TOGGLE_W       44
+#define TOGGLE_H       24
+#define TOGGLE_X       (CARD_IN_X1 - TOGGLE_W)       // 259
+#define TOGGLE_DY      ((CARD_H - TOGGLE_H) / 2)     // 11
+
+// ── Scenes page ──────────────────────────────────────────
+// A 3-column grid of 88x64 tiles, three rows visible, scrolled a page at a time
+// from the gutter on the right. This is the one scrolling surface in the
+// firmware — Devices and Settings are still fixed — and it exists so the scene
+// list can grow past the five defined today with no layout work. How many
+// scenes there are is NOT declared here: it is sizeof(SCENE[]) in screen.cpp,
+// so adding one is a single table line.
+//
+// 3 columns, not the 4 it used to be: a 66px square could hold three cryptic
+// dots and a name in the fallback font, and nothing else. 88px holds the name at
+// full size with room to spare, which is what a scene tile is actually for —
+// 9 legible tiles per page beat 12 illegible ones, and the page still scales.
+//
+// The grid TILES the body exactly in y (32 + 2*72 + 64 = 240), the same
+// no-stranded-pixels rule the device rows follow. In x it stops short of
+// SCENE_SB_X0 so the gutter and the tiles never overlap — each region only ever
+// clears its own rect, so an overlap leaves pixels nothing repaints.
+//
+// The gaps differ per axis (12 across, 8 down) because the vertical budget is
+// fixed: 2*PITCH_Y + TILE_H == 208 has exactly one solution keeping tiles above
+// 60px, and it is 8. Both values are still on the spacing scale.
+#define SCENE_COLS      3
+#define SCENE_VIS_ROWS  3
+#define SCENE_TILE_W    88
+#define SCENE_TILE_H    64
+#define SCENE_X0        SP_2                            // 8
+#define SCENE_GAP_X     SP_3                            // 12
+#define SCENE_GAP_Y     SP_2                            // 8
+#define SCENE_PITCH_X   (SCENE_TILE_W + SCENE_GAP_X)    // 100
+#define SCENE_PITCH_Y   (SCENE_TILE_H + SCENE_GAP_Y)    // 72
+#define SCENE_PER_PAGE  (SCENE_COLS * SCENE_VIS_ROWS)   // 9 tiles on screen
+
+// Tile contents, as offsets within the 88x64 tile. Chosen so the pips+name block
+// is vertically CENTRED: the pips span y+15..23 and the name's 13px ascent box
+// spans y+36..49, so the content runs 15..49 — centre 32, exactly half of
+// SCENE_TILE_H.
+#define SCENE_PIP_DY    19                // one pip per bulb, centre line
+#define SCENE_PIP_R     4
+#define SCENE_PIP_GAP   16                // 2*16 + 2*4 = 40 in 88px
+#define SCENE_NAME_DY   42                // scene name centre line
+
+// Scroll gutter: x 300..319, chevrons top and bottom. 20 x 104 per arrow —
+// thin, but it sits in the middle band the 4-point touch fit INTERPOLATES rather
+// than the top band it extrapolates, so it is nothing like as marginal as the
+// tab strip. Drawn empty and dead to taps whenever every scene fits on one page,
+// which is the case today, so the current UI gains no affordance it can't use.
+#define SCENE_SB_X0     300
+#define SCENE_SB_W      (SCR_W - SCENE_SB_X0)           // 20
+// Tap split between the two arrows: y 32..135 scrolls up, 136..239 down.
+#define SCENE_SB_MID    ((ROWS_Y0 + SCR_H) / 2)
 
 #define NUM_DEVICES    4
+// Devices 0..2 are the bulbs, device 3 is the AC. Scenes act on the bulbs only.
+#define NUM_BULBS      3
 #define BULB_BTNS      6                  // OFF, 1%, 30%, 100%, warm, cool
-#define AC_BTNS        5                  // OFF, AC, DRY, T+, T-
+#define AC_BTNS        6                  // OFF, AC, DRY, up, <setpoint>, down
+
+// The AC row's stepper: [up] 29C [down], with the value in the slot BETWEEN the
+// two controls that change it rather than in the row's top line. Named here
+// because both doAction() and the renderer have to agree on which slot is which,
+// and because AC_BTN_TEMP is a READOUT: it draws no button, takes no press
+// flash, and screenHitTest() reports a tap on it as a miss. That dead cell
+// between the arrows is deliberate — it is what stops a slightly-off tap from
+// stepping the temperature the wrong way.
+#define AC_BTN_TUP     3
+#define AC_BTN_TEMP    4
+#define AC_BTN_TDN     5
 
 // ── Light presets ────────────────────────────────────────
 // The three brightness buttons and the two colour-temp swatches.
@@ -174,7 +398,8 @@
 // Fallbacks only — real values come from the entity's own attributes
 // (min_temp / max_temp / target_temp_step) once the first poll lands. Set to
 // what climate.bedroom2 actually reports so the pre-first-poll window matches
-// the device instead of letting T+/T- clamp somewhere it wouldn't accept.
+// the device instead of letting the setpoint steps clamp somewhere it
+// wouldn't accept.
 #define AC_TEMP_MIN_DEF   18.0f
 #define AC_TEMP_MAX_DEF   31.0f
 #define AC_TEMP_STEP_DEF  1.0f
