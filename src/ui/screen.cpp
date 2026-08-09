@@ -15,10 +15,10 @@
 //
 //   y   0..30    header   [wifi] | Devices  Scenes  Settings | 23:45
 //   y     31     divider
-//   y  32..83    row band 0   card at y 35..80
-//   y  84..135   row band 1   card at y 87..132
-//   y 136..187   row band 2   card at y 139..184
-//   y 188..239   row band 3   card at y 191..236
+//   y  32..83    row band 0   card at y 34..81
+//   y  84..135   row band 1   card at y 86..133
+//   y 136..187   row band 2   card at y 138..185
+//   y 188..239   row band 3   card at y 190..237
 //
 // Scenes uses its own grid over the same body: 3 columns of 88x64 tiles on a
 // 100 x 72 pitch, three rows visible (y 32..95, 104..167, 176..239), with the
@@ -36,8 +36,9 @@
 //     card, so Devices and Settings self-clear and the bands tile the body
 //     exactly. Scenes does not self-clear — see bodyReset().
 //   * Every dirty rect inside a card starts at CARD_IN_X0, never at CARD_X.
-//     Filling x 8..15 would paint the R_LG corner arcs with the surface colour
-//     and square the card off, one repaint at a time.
+//     Filling x 8..15 would paint over the card's own left border column and
+//     erase the outline, one repaint at a time. (This used to be about the R_LG
+//     corner arcs; the corners are square now, the rule is not.)
 //   * An inactive control has no border (see ctlColour). The old page outlined
 //     all 23 controls at once; removing those outlines, not changing any colour,
 //     is what made this page quiet.
@@ -61,9 +62,16 @@ static_assert(STATUS_DIV_Y - TAB_UL_H == TAB_UL_Y,
               "the tab cell does not seat the underline at TAB_UL_Y");
 static_assert(ROWS_Y0 + NUM_DEVICES * ROW_H == SCR_H, "rows do not fill the body");
 
-// A card's two lines must not collide with each other or run out of the card.
+// A STACKED card's two lines must not collide with each other or run out of the
+// card. That is the AC card and the Settings brightness card; the bulb cards are
+// inline and get their own bound below.
 static_assert(CARD_L1_Y + CARD_L1_H <= CTL_DY, "card line 1 overlaps the controls");
 static_assert(CTL_DY + CTL_H <= CARD_H, "control row overruns the card");
+static_assert(BULB_CTL_DY + BULB_CTL_H <= CARD_H,
+              "inline bulb control row overruns the card");
+// The identity column has to leave the name a positive budget after the icon,
+// or textTrunc() would be handed a negative width.
+static_assert(BULB_NAME_W > 0, "bulb identity column has no room for a name");
 
 // Both device rows keep SIX logical slots and the same slot meanings, even though
 // the two kinds now lay those slots out differently (4 chips + 2 swatches vs
@@ -72,13 +80,14 @@ static_assert(CTL_DY + CTL_H <= CARD_H, "control row overruns the card");
 // knows about the difference.
 static_assert(AC_BTNS == BULB_BTNS, "the two row kinds share one slot count");
 
-// Bulb control row: 4 chips then 2 swatch cells, filling the card's inner width
-// EXACTLY. Exactness matters less here than on the body grid (the card fill is
-// behind it either way) but an overrun would paint over the card's rounded edge.
-static_assert(CARD_IN_X0 + 4 * CHIP_PITCH - CHIP_GAP + 2 * SW_CELL_W
+// Bulb row: the identity column, then 4 chips, then 2 swatch cells, filling the
+// card's inner width EXACTLY. Exactness matters less here than on the body grid
+// (the card fill is behind it either way) but an overrun would paint over the
+// card's rounded edge.
+static_assert(BULB_CTL_X0 + 4 * BULB_CHIP_PITCH - CHIP_GAP + 2 * SW_CELL_W
                   == CARD_IN_X1 + 1,
-              "bulb control row does not fill the card");
-static_assert(SW_X0 == CARD_IN_X0 + 4 * CHIP_PITCH - CHIP_GAP,
+              "bulb row does not fill the card");
+static_assert(SW_X0 == BULB_CTL_X0 + 4 * BULB_CHIP_PITCH - CHIP_GAP,
               "swatch cells do not follow the chips");
 // AC control row: 3 wider chips then the stepper's three cells.
 static_assert(ACS_X0 == CARD_IN_X0 + 3 * ACM_PITCH - CHIP_GAP,
@@ -89,6 +98,10 @@ static_assert(ACS_X0 + 2 * ACS_BTN_W + ACS_VAL_W == CARD_IN_X1 + 1,
 static_assert(CARD_IN_X0 + (BRI_STEPS - 1) * CHIP_PITCH + CHIP_W
                   <= CARD_IN_X1 + 1,
               "brightness chips run past the card");
+// Settings night mode: 3 chips on the shared pitch.
+static_assert(CARD_IN_X0 + (NIGHT_CHIPS - 1) * CHIP_PITCH + CHIP_W
+                  <= CARD_IN_X1 + 1,
+              "night-mode chips run past the card");
 
 // Same rule for the Scenes grid, asserted twice for two distinct failures. It
 // must fill the body EXACTLY in y, because a leftover band below the last tile
@@ -105,7 +118,7 @@ static_assert(SCENE_X0 + (SCENE_COLS - 1) * SCENE_PITCH_X + SCENE_TILE_W
 // ── labels ───────────────────────────────────────────────
 // Chip captions are UPPERCASE and card titles are not, and that is a fit
 // decision rather than a stylistic one: caps have no descenders, so a 13px label
-// centres cleanly in a 22px chip, while a lowercase 'y' would touch its edge.
+// centres cleanly in a 26px chip, while a lowercase 'y' would touch its edge.
 // Titles and tab labels have the vertical room, so they get sentence case, which
 // reads considerably calmer at this size.
 static const char* BULB_LABEL[BULB_BTNS]     = {"OFF", "1%", "30%", "100%", nullptr, nullptr};
@@ -114,21 +127,24 @@ static const char* BULB_LABEL_ALT[BULB_BTNS] = {"OFF", "1",  "30",  "100",  null
 // they carry no label. See btnRect() for how those three slots are placed.
 static const char* AC_LABEL[AC_BTNS]         = {"OFF", "COOL", "DRY", nullptr, nullptr, nullptr};
 
-// Indexed by PageId. Sentence case, and they fit: the widest ("Settings") is
-// 65px of the 73px a cell leaves after TAB_LBL_DX, measured in F_BODY rather
-// than guessed. That width is also what the underline spans.
+// Indexed by PageId. Sentence case, and they fit with room to spare: the widest
+// ("Settings") is 49px in Font 2 of the 73px a cell leaves after TAB_LBL_DX,
+// measured rather than guessed. That width is also what the underline spans.
 static const char* TAB_LABEL[TAB_COUNT] = {"Devices", "Scenes", "Settings"};
 
 static const char* const BRI_LABEL[BRI_STEPS] = BRI_LABEL_LIST;
 
 // Settings rows. Each caption says what the toggle will actually do, so the
-// control is never asking about a value the user has to remember.
+// control is never asking about a value the user has to remember. Night
+// mode has no caption of its own now — a chip row replaces it, one label per
+// state, since there's no longer a single fixed effect to describe.
 static const char* SET_LABEL[SET_ROWS] = {
   "Brightness", "Night mode", "Night schedule", "Flip screen"
 };
 static const char* SET_CAPTION[SET_ROWS] = {
-  nullptr, "Red display, 1% backlight", "23:45 - 08:00", "Rotate 180 degrees"
+  nullptr, nullptr, "23:45 - 08:00", "Rotate 180 degrees"
 };
+static const char* NIGHT_LABEL[NIGHT_CHIPS] = { "OFF", "SHIFT", "RED" };
 
 // ── scenes ───────────────────────────────────────────────
 // Macros over the three bulbs. The AC is deliberately untouched: it runs on a
@@ -184,9 +200,11 @@ static constexpr uint16_t SCENE_MAX_ROW =
 struct RowSnap {
   bool     valid;
   char     stateStr[48];        // last rendered state text
+  char     humStr[8];           // AC row only: last rendered humidity suffix
   char     tempStr[8];          // AC row only: last rendered setpoint
   bool     stale;
   bool     err;
+  bool     alarm;               // err OR offline — what the card's border shows
   // The status icon's RESOLVED appearance, not the values behind it. A bulb's
   // icon is its real colour temperature blended by its real brightness, so
   // comparing the colour is the same "compare by visual state" rule the chips
@@ -216,8 +234,9 @@ static SceneSnap sceneSnap;
 struct SettingSnap {
   bool    valid;
   uint8_t briVis[BRI_STEPS];
-  int8_t  briShown;           // level named on the Brightness card's own line
-  bool    toggle[SET_ROWS];   // index SET_ROW_BRI unused
+  int8_t  briShown;             // level named on the Brightness card's own line
+  uint8_t nightVis[NIGHT_CHIPS];
+  bool    toggle[SET_ROWS];     // indices SET_ROW_BRI, SET_ROW_NIGHT unused
 };
 static SettingSnap setSnap;
 
@@ -263,8 +282,12 @@ static inline int16_t sceneTileY(uint8_t slot) {
 // caller (renderer, hit test, calibration verify) goes through here, so the
 // drawn rect and the tappable rect cannot drift apart.
 //
-// Bulb:  [OFF][1%][30%][100%]  (o)(o)          slots 0..3 chips, 4..5 swatches
-// AC:    [OFF][COOL][DRY]      [v] 30 [^]      slots 0..2 chips, 5/4/3 stepper
+// Bulb:  (i) 1 [OFF][1%][30%][100%] (o)(o)     slots 0..3 chips, 4..5 swatches
+// AC:        [OFF][COOL][DRY]  [v] 30 [^]      slots 0..2 chips, 5/4/3 stepper
+//
+// The two kinds now differ in y as well as x: a bulb row is inline, so its
+// controls take the card's full height (BULB_CTL_*) starting after the identity
+// column, while the AC's sit in the 26px strip under its state line (CTL_*).
 //
 // Note the AC stepper's slot order is REVERSED against x: slot 5 (down) is on
 // the left and slot 3 (up) on the right, so the control reads left-to-right as
@@ -272,10 +295,9 @@ static inline int16_t sceneTileY(uint8_t slot) {
 // them here is what buys the natural order without touching the action layer.
 static void btnRect(uint8_t dev, uint8_t b,
                     int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
-  y = cardTop(dev) + CTL_DY;
-  h = CTL_H;
-
   if (S.dev[dev].kind == DEV_CLIMATE) {
+    y = cardTop(dev) + CTL_DY;
+    h = CTL_H;
     if (b < 3) { x = CARD_IN_X0 + b * ACM_PITCH; w = ACM_W; return; }
     switch (b) {
       case AC_BTN_TDN:  x = ACS_X0;                            w = ACS_BTN_W; return;
@@ -284,7 +306,9 @@ static void btnRect(uint8_t dev, uint8_t b,
     }
   }
 
-  if (b < 4) { x = CARD_IN_X0 + b * CHIP_PITCH; w = CHIP_W; return; }
+  y = cardTop(dev) + BULB_CTL_DY;
+  h = BULB_CTL_H;
+  if (b < 4) { x = BULB_CTL_X0 + b * BULB_CHIP_PITCH; w = BULB_CHIP_W; return; }
   x = SW_X0 + (b - 4) * SW_CELL_W;
   w = SW_CELL_W;
 }
@@ -296,6 +320,17 @@ static void briRect(uint8_t b, int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
   x = CARD_IN_X0 + b * CHIP_PITCH;
   w = CHIP_W;
   y = cardTop(SET_ROW_BRI) + CTL_DY;
+  h = CTL_H;
+}
+
+// The Night mode row's 3 chips (Off/Shift/Red), on the same shared chip pitch.
+// NIGHT_CHIPS(3) uses far less of CARD_IN_W than BRI_STEPS(5) does, so there's
+// no static_assert risk here in practice — added anyway to match the
+// brightness row's and catch a future edit that widens the chips.
+static void nightRect(uint8_t c, int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
+  x = CARD_IN_X0 + c * CHIP_PITCH;
+  w = CHIP_W;
+  y = cardTop(SET_ROW_NIGHT) + CTL_DY;
   h = CTL_H;
 }
 
@@ -466,12 +501,12 @@ static void iconVis(const DeviceState& d, bool stale, uint8_t& shape,
     shape = IS_BULB_OFF; colour = C_DISABLED;
   } else {
     shape = IS_BULB_ON;
-    // Level as a blend toward the CARD, not the background — the icon sits on a
-    // surface, and blending to C_BG would leave a dark halo at low brightness.
+    // Level as a blend toward what the icon sits on. The card carries no fill,
+    // so that is C_BG — anything lighter would leave a halo at low brightness.
     // 1% still lands at 70/255 of the hue, which stays visible.
     const uint16_t c = bulbHue(d);
     colour = (d.pct >= 0 && d.pct < BRI_HIGH)
-               ? lerp565(C_SURFACE, c, (uint8_t)(70 + d.pct * 185 / 100))
+               ? lerp565(C_BG, c, (uint8_t)(70 + d.pct * 185 / 100))
                : c;
   }
 
@@ -479,7 +514,7 @@ static void iconVis(const DeviceState& d, bool stale, uint8_t& shape,
   // the same fail-soft rule: keep the last known reading, but dim it once the
   // poll goes stale rather than presenting old data at full confidence. Dimming
   // the text and not the icon left half the card claiming to be current.
-  if (stale) colour = lerp565(C_SURFACE, colour, 110);
+  if (stale) colour = lerp565(C_BG, colour, 110);
 }
 
 static void drawIcon(uint8_t shape, uint16_t colour, int16_t cx, int16_t cy) {
@@ -492,7 +527,15 @@ static void drawIcon(uint8_t shape, uint16_t colour, int16_t cx, int16_t cy) {
   }
 }
 
-// ── state text (right of each card's identity line) ──────
+// ── state text (right of the AC card's identity line) ────
+//
+// AC ONLY. The bulb cards went inline and dropped their state line, so what used
+// to be four readouts is one. The bulb branch that produced "30%  2700K" / "Off"
+// is gone rather than left unreachable: an unused code path that still looks
+// authoritative is how a future edit reintroduces a string with nowhere to go.
+// What that branch did for BRIGHTNESS is now the icon's job (which is why the
+// icon compares by resolved colour); what it did for OFFLINE is now the card
+// border's, in drawDeviceCard().
 
 static const char* prettyMode(const char* m) {
   if (!strcmp(m, "heat"))     return "HEAT";
@@ -509,44 +552,42 @@ static void stateText(const DeviceState& d, char* out, size_t n, bool& degree) {
   if (!d.known) { snprintf(out, n, "--"); return; }
   // Say so explicitly rather than letting an unreachable device read as OFF.
   // "OFFLINE" and not "UNAVAILABLE": at 75px against the latter's 122px it is
-  // what lets a 14-character device name sit beside it without being truncated,
-  // and it is the plainer word besides. The rest of the fail-loud treatment is
+  // what lets a long device name sit beside it without being truncated, and it
+  // is the plainer word besides. The rest of the fail-loud treatment is
   // unchanged — red text, an error-coloured icon, and every control greyed out.
   if (!d.avail) { snprintf(out, n, "OFFLINE"); return; }
 
-  if (d.kind == DEV_CLIMATE) {
-    // The MODE is not repeated here: the chips select it and the icon shows it.
-    // What nothing else on the card can show is the room reading, so that is
-    // what this line is for. A mode outside the three the chips offer (heat,
-    // fan_only, auto — set from the HA app) IS named, because otherwise the card
-    // would show no active chip and no explanation.
-    //
-    // In that case the "Room" label is what gets dropped rather than the device
-    // name: an exceptional mode is the more urgent fact, the number is still
-    // unmistakably a temperature next to its degree ring, and keeping both
-    // words costs 53px the name does not have.
-    const bool charted = !strcmp(d.mode, "off") || !strcmp(d.mode, AC_MODE_COOL) ||
-                         !strcmp(d.mode, AC_MODE_DRY);
-    if (!isnan(d.room)) {
-      degree = true;
-      if (charted) snprintf(out, n, "Room %.0f", d.room);
-      else         snprintf(out, n, "%s  %.0f", prettyMode(d.mode), d.room);
-    } else {
-      snprintf(out, n, "%s", charted ? "" : prettyMode(d.mode));
-    }
-    return;
-  }
-
-  // The chips only cover three presets, so a bulb set to 47% from the phone
-  // would light no chip at all. This line is the authoritative live value and is
-  // what makes that state legible rather than looking like a fault.
-  if (!d.on) { snprintf(out, n, "Off"); return; }
-  if (d.pct >= 0) {
-    if (d.supportsCT && d.kelvin > 0) snprintf(out, n, "%d%%  %dK", d.pct, d.kelvin);
-    else                              snprintf(out, n, "%d%%", d.pct);
+  // The MODE is not repeated here: the chips select it and the icon shows it.
+  // What nothing else on the card can show is the room reading, so that is what
+  // this line is for. A mode outside the three the chips offer (heat, fan_only,
+  // auto — set from the HA app) IS named, because otherwise the card would show
+  // no active chip and no explanation.
+  //
+  // In that case the "Room" label is what gets dropped rather than the device
+  // name: an exceptional mode is the more urgent fact, the number is still
+  // unmistakably a temperature next to its degree ring, and keeping both words
+  // costs 53px the name does not have.
+  const bool charted = !strcmp(d.mode, "off") || !strcmp(d.mode, AC_MODE_COOL) ||
+                       !strcmp(d.mode, AC_MODE_DRY);
+  if (!isnan(d.room)) {
+    degree = true;
+    if (charted) snprintf(out, n, "Room %.0f", d.room);
+    else         snprintf(out, n, "%s  %.0f", prettyMode(d.mode), d.room);
   } else {
-    snprintf(out, n, "On");
+    snprintf(out, n, "%s", charted ? "" : prettyMode(d.mode));
   }
+}
+
+// Trails the room reading, right of the degree ring: "Room 27(deg) 55%". Kept
+// as its own short string rather than folded into stateText()'s buffer because
+// the ring has to be drawn BETWEEN the two — see the offset arithmetic in
+// drawDeviceCard(). Shown whenever a reading exists, independent of `degree`:
+// humidity is still worth a card even in an exceptional mode where the room
+// temperature itself was dropped for the mode name.
+static void humidityText(const DeviceState& d, char* out, size_t n) {
+  out[0] = '\0';
+  if (!d.known || !d.avail || d.humidity < 0) return;
+  snprintf(out, n, "%d%%", d.humidity);
 }
 
 // The AC setpoint as drawn between the chevrons. "--" rather than a guessed
@@ -573,71 +614,118 @@ static void drawDeviceCard(uint8_t dev, bool force) {
   RowSnap&      sn    = snap[dev];
   const bool    first = force || !sn.valid;
   const int16_t top   = cardTop(dev);
+  const bool    ac    = (d.kind == DEV_CLIMATE);
+
+  // The card's OUTLINE is its alarm channel. A failed service call has always
+  // flashed it; an unreachable device now HOLDS it, which is what replaced the
+  // word "OFFLINE" on the bulb cards when their state line went away. The
+  // fail-loud rule — never let an unreachable device read as a normal state —
+  // has to survive the inline layout, and a border costs none of the width the
+  // controls now take. The AC card keeps its word too and takes the border as
+  // well, so both kinds speak one alarm language.
+  //
+  // `!avail` cannot fire before the first poll: DeviceState::avail starts true
+  // and only a poll that actually saw "unavailable" clears it, so this does not
+  // paint every card red for the first 1.5 s after boot.
+  const bool alarm = err || !d.avail;
 
   // On a first/forced draw, clear the whole row BAND and lay the card down. The
   // band is full width and the four bands tile the body exactly, which is what
   // makes this page self-clearing: the per-region clears below cover only the
-  // text strip and the control rects, leaving the 6px gutters between cards and
+  // text strip and the control rects, leaving the 4px gutters between cards and
   // the 8px side margins to hold whatever was underneath. Boot text used to
   // survive in exactly those slivers.
   if (first) {
     tft.fillRect(0, rowTop(dev), SCR_W, ROW_H, C_BG);
-    wCard(CARD_X, top, CARD_W, CARD_H, C_SURFACE, err ? C_ERROR : C_BORDER);
-  } else if (err != sn.err) {
-    // A failed service call is a transient NOTIFICATION on this card, so the
-    // whole surface carries it rather than one word of text going red. Redrawing
-    // the outline alone is enough — the fill and everything on it is unchanged.
-    tft.drawRoundRect(CARD_X, top, CARD_W, CARD_H, R_LG, err ? C_ERROR : C_BORDER);
+    wCard(CARD_X, top, CARD_W, CARD_H, C_BG, alarm ? C_ERROR : C_BORDER);
+  } else if (alarm != sn.alarm) {
+    // The whole surface carries the notification rather than one word of text
+    // going red. Redrawing the outline alone is enough — the fill and everything
+    // on it is unchanged.
+    tft.drawRect(CARD_X, top, CARD_W, CARD_H, alarm ? C_ERROR : C_BORDER);
   }
 
-  // ── region 1: status icon + name + live state ──
+  // ── region 1: status icon + name (+ live state, AC only) ──
   // One region, because the icon sits inside the strip the text clears. Its
   // compare therefore has to include the icon's appearance, or an AC mode change
   // (which does not alter the state string) would repaint nothing.
-  char st[48];
+  //
+  // A BULB CARD HAS NO STATE TEXT. The inline row has no width for it, and the
+  // icon already carries the same reading in a form that is faster to scan — its
+  // real colour temperature, blended by its real brightness — with the lit chip
+  // saying which preset that value matches. So stateText() is AC-only now, and a
+  // bulb's identity region is the icon and the ordinal.
+  char st[48] = "";
   bool degree = false;
-  stateText(d, st, sizeof(st), degree);
+  char hum[8] = "";
+  if (ac) {
+    stateText(d, st, sizeof(st), degree);
+    humidityText(d, hum, sizeof(hum));
+  }
 
   uint8_t  icoShape;
   uint16_t icoColour;
   iconVis(d, stale, icoShape, icoColour);
 
-  if (first || stale != sn.stale || err != sn.err ||
+  if (first || stale != sn.stale || err != sn.err || alarm != sn.alarm ||
       icoShape != sn.icoShape || icoColour != sn.icoColour ||
-      strcmp(st, sn.stateStr) != 0) {
-    // GFX fonts paint no background, so clear first. Starts at CARD_IN_X0 to
-    // stay clear of the card's corner arcs.
-    tft.fillRect(CARD_IN_X0, top + CARD_L1_Y, CARD_IN_W, CARD_L1_H, C_SURFACE);
+      strcmp(st, sn.stateStr) != 0 || strcmp(hum, sn.humStr) != 0) {
+    // Where the identity sits: the AC's is the top line of a stacked card, the
+    // bulb's is centred in the single inline row beside its controls.
+    const int16_t idY  = top + (ac ? CARD_L1_Y : BULB_CTL_DY);
+    const int16_t idH  = ac ? CARD_L1_H : BULB_CTL_H;
+    const int16_t idCy = top + (ac ? CARD_L1_CY : CARD_H / 2);
 
-    drawIcon(icoShape, icoColour, CARD_ICO_CX, top + CARD_L1_CY);
+    // Text is drawn transparent (see textAt), so clear first. Starts at CARD_IN_X0
+    // to stay clear of the card's corner arcs. A bulb clears only its identity
+    // COLUMN: the six controls beside it own their own rects and repaint on their
+    // own compares, so wiping the full width here would erase chips that nothing
+    // was going to redraw.
+    tft.fillRect(CARD_IN_X0, idY, ac ? CARD_IN_W : BULB_ID_W, idH, C_BG);
 
-    const uint16_t stFg = (err || !d.avail) ? C_ERROR : (stale ? C_DIM : C_TEXT2);
-    const int16_t  stW  = textW(F_BODY, st) + (degree ? 9 : 0);
+    drawIcon(icoShape, icoColour, CARD_ICO_CX, idCy);
 
-    // The NAME is what gets truncated when the two do not both fit: the state is
-    // short, live and the reason to look at the card at all, while a name is
-    // static and already known to whoever installed it.
-    textTrunc(F_TITLE, d.name, CARD_TXT_X, top + CARD_L1_CY,
-              CARD_IN_X1 - CARD_TXT_X - stW - SP_2,
-              stale ? C_DIM : C_TEXT);
+    const uint16_t stFg  = (err || !d.avail) ? C_ERROR : (stale ? C_DIM : C_TEXT2);
+    // Humidity sits right of the room reading's degree ring, sharing stFg so it
+    // follows the same stale/err colour rules rather than reading as a second,
+    // unrelated fact. humGap is the same SP_2 the rest of the identity line
+    // uses between unrelated pieces of text (see the CARD_TXT_X/stW gap below).
+    const int16_t  humW  = hum[0] ? textW(F_BODY, hum) : 0;
+    const int16_t  humGap = hum[0] ? SP_2 : 0;
+    const int16_t  stW   = textW(F_BODY, st) + (degree ? 9 : 0) + humGap + humW;
+    // Where the room-reading block (text + ring) ends, i.e. where the humidity
+    // suffix's gap begins. Everything from here to CARD_IN_X1 is humidity.
+    const int16_t  stEndX = CARD_IN_X1 - humGap - humW;
+
+    // On the AC card the NAME is what gets truncated when the two do not both
+    // fit: the state is short, live and the reason to look at the card at all,
+    // while a name is static and already known to whoever installed it. A bulb
+    // has no state beside it, so its budget is the fixed identity column.
+    //
+    // The bulb's name also takes the alarm colour, because it is the only text
+    // left on that card: a red ordinal beside a red icon inside a red border,
+    // with every control greyed, is what OFFLINE looks like now.
+    textTrunc(F_TITLE, d.name, CARD_TXT_X, idCy,
+              ac ? (int16_t)(CARD_IN_X1 - CARD_TXT_X - stW - SP_2) : BULB_NAME_W,
+              (!ac && alarm) ? C_ERROR : (stale ? C_DIM : C_TEXT));
 
     if (st[0]) {
-      textAt(F_BODY, st, CARD_IN_X1 - (degree ? 9 : 0), top + CARD_L1_CY,
-             MR_DATUM, stFg);
+      textAt(F_BODY, st, stEndX - (degree ? 9 : 0), idCy, MR_DATUM, stFg);
       if (degree) {
-        const int16_t ry = top + CARD_L1_CY - fontAscent(F_BODY) / 2 + 2;
-        tft.drawCircle(CARD_IN_X1 - 3, ry, 2, stFg);
+        const int16_t ry = idCy + fontInkTop(F_BODY) + 2;
+        tft.drawCircle(stEndX - 3, ry, 2, stFg);
       }
     }
+    if (hum[0]) textAt(F_BODY, hum, CARD_IN_X1, idCy, MR_DATUM, stFg);
 
     snprintf(sn.stateStr, sizeof(sn.stateStr), "%s", st);
+    snprintf(sn.humStr, sizeof(sn.humStr), "%s", hum);
     sn.icoShape  = icoShape;
     sn.icoColour = icoColour;
   }
 
   // ── region 2: each control, independently dirty ──
-  const uint8_t n  = btnCount(d);
-  const bool    ac = (d.kind == DEV_CLIMATE);
+  const uint8_t n = btnCount(d);
   for (uint8_t b = 0; b < n; b++) {
     // The AC's middle slot is the setpoint readout, not a control: it is a text
     // region compared by its rendered string, like the identity line, so it is
@@ -687,7 +775,7 @@ static void drawDeviceCard(uint8_t dev, bool force) {
       btnRect(dev, AC_BTN_TEMP, x, y, w, h);
       const bool known = (tv[0] != '-');
       wValue(x, y, w, h, tv, known,
-             err || !d.avail ? C_ERROR : (stale ? C_DIM : C_TEXT), C_SURFACE);
+             err || !d.avail ? C_ERROR : (stale ? C_DIM : C_TEXT), C_BG);
       snprintf(sn.tempStr, sizeof(sn.tempStr), "%s", tv);
     }
   }
@@ -697,6 +785,7 @@ static void drawDeviceCard(uint8_t dev, bool force) {
   // miss a stale/err transition that region 1 had already consumed.
   sn.stale = stale;
   sn.err   = err;
+  sn.alarm = alarm;
   sn.valid = true;
 }
 
@@ -768,10 +857,12 @@ static void drawStatus(bool force) {
   // connection health belongs to the glyph and staleness to the card dimming,
   // not here.
   //
-  // The clock is always exactly 5 characters. "23:45" is 44px in F_TITLE against
+  // The clock is always exactly 5 characters. "23:45" is 35px in F_TITLE against
   // the 45px this region leaves once its 6px right margin is taken, so anything
   // wider paints into tab 2's cell — which only repaints on a page change, so
-  // the overflow would be permanent. Don't put anything else here.
+  // the overflow would be permanent. The margin was 1px under FreeSans at 44px
+  // and is 10px in Font 2; the rule is unchanged, it is just no longer tight.
+  // Don't put anything else here.
   if (force_ || hhmm != statusSnap.hhmm) {
     tft.fillRect(SCR_W - STATUS_CLK_W, 0, STATUS_CLK_W, STATUS_DIV_Y, C_BG);
     char clk[8];
@@ -804,11 +895,13 @@ static void drawStatus(bool force) {
 static void drawSceneTile(uint8_t slot, uint16_t idx, uint8_t vis) {
   const int16_t x = sceneTileX(slot), y = sceneTileY(slot);
 
-  // A slot past the end of the table is cleared with a SQUARE fillRect, not a
-  // rounded one: fillRoundRect leaves the four corner pixels of the bounding box
-  // untouched, so a rounded clear would strand the previous tile's corners.
-  // Squaring it here is also why a scroll needs no body wipe — every tile either
+  // A slot past the end of the table is blanked with the same rect the tile
+  // occupies, which is why a scroll needs no body wipe: every tile either
   // repaints its own rect or blanks it, and the gaps never change content.
+  // (When tiles were rounded this clear had to be square ON PURPOSE, since
+  // fillRoundRect leaves the four corner pixels of its bounding box untouched
+  // and a rounded clear stranded the previous tile's corners. Now the drawn
+  // shape and the clear are the same rect and it cannot drift.)
   if (idx >= SCENE_N) {
     tft.fillRect(x, y, SCENE_TILE_W, SCENE_TILE_H, C_BG);
     return;
@@ -906,7 +999,7 @@ static void drawSceneScrollbar(uint8_t pressed) {
   // C++ level may not accept.
   const uint16_t maxRow = SCENE_MAX_ROW ? SCENE_MAX_ROW : 1;
   const int16_t ty = tY + (int16_t)((int32_t)(tH - th) * S.sceneRow / maxRow);
-  tft.fillRoundRect(cx - 2, ty, 5, th, 2, C_ACCENT);
+  tft.fillRect(cx - 2, ty, 5, th, C_ACCENT);
 }
 
 static void drawScenes() {
@@ -958,9 +1051,9 @@ static void drawScenes() {
 
 // ── settings page ────────────────────────────────────────
 
+// Night mode is chip-driven now, not a toggle — it has no entry here.
 static bool setToggleVal(uint8_t row) {
   switch (row) {
-    case SET_ROW_NIGHT: return S.set.night;
     case SET_ROW_SCHED: return S.set.nightSched;
     case SET_ROW_FLIP:  return S.set.flip;
     default:            return false;
@@ -984,7 +1077,7 @@ static void drawSettingChrome(uint8_t row) {
   tft.fillRect(0, rowTop(row), SCR_W, ROW_H, C_BG);
   wCard(CARD_X, top, CARD_W, CARD_H, C_SURFACE, C_BORDER);
 
-  if (row == SET_ROW_BRI) {
+  if (row == SET_ROW_BRI || row == SET_ROW_NIGHT) {
     setIcon(row, CARD_ICO_CX, top + CARD_L1_CY);
     textAt(F_TITLE, SET_LABEL[row], CARD_TXT_X, top + CARD_L1_CY, ML_DATUM,
            C_TEXT);
@@ -1031,8 +1124,22 @@ static void drawSettings() {
     wChip(x, y, w, h, BRI_LABEL[b], nullptr, vis);
   }
 
+  // Night mode's 3-chip row, same shape as the brightness loop above.
+  for (uint8_t c = 0; c < NIGHT_CHIPS; c++) {
+    const uint8_t vis = pressedNow(HIT_SETTING, SET_ROW_NIGHT, (int8_t)c)
+                            ? BV_PRESSED
+                            : (NIGHT_CHIP_MODE[c] == S.set.nightMode ? BV_ACTIVE
+                                                                     : BV_INACTIVE);
+    if (!first && vis == setSnap.nightVis[c]) continue;
+    setSnap.nightVis[c] = vis;
+
+    int16_t x, y, w, h;
+    nightRect(c, x, y, w, h);
+    wChip(x, y, w, h, NIGHT_LABEL[c], nullptr, vis);
+  }
+
   // Toggles get no press flash: the flip IS the feedback, and it is immediate.
-  for (uint8_t r = SET_ROW_BRI + 1; r < SET_ROWS; r++) {
+  for (uint8_t r = SET_ROW_NIGHT + 1; r < SET_ROWS; r++) {
     const bool on = setToggleVal(r);
     if (!first && on == setSnap.toggle[r]) continue;
     setSnap.toggle[r] = on;
@@ -1076,8 +1183,8 @@ void screenSetFlip(bool flip) {
   screenInvalidate();
 }
 
-void screenSetNight(bool on) {
-  if (!themeSetNight(on)) return;
+void screenSetNightMode(uint8_t mode) {
+  if (!themeSetNightMode(mode)) return;
   // Every dirty-region compare is on a VALUE (state string, BtnVis, toggle
   // bool) and a palette swap changes none of them, so without an explicit
   // invalidate the screen would keep day colours until something else moved.
@@ -1210,7 +1317,7 @@ void screenCalibVerifyScreen() {
     for (uint8_t b = 0; b < btnCount(S.dev[d]); b++) {
       int16_t x, y, w, h;
       btnRect(d, b, x, y, w, h);
-      tft.drawRoundRect(x, y, w, h, R_SM, C_BORDER);
+      tft.drawRect(x, y, w, h, C_BORDER);
     }
   }
   // The tab strip too. It is the thinnest target in the firmware and sits in
@@ -1279,6 +1386,14 @@ Hit screenHitTest(int16_t px, int16_t py) {
         }
         return miss;
       }
+      if (r == SET_ROW_NIGHT) {
+        for (uint8_t c = 0; c < NIGHT_CHIPS; c++) {
+          int16_t x, y, w, h;
+          nightRect(c, x, y, w, h);
+          if (px >= x && px < x + w) return { HIT_SETTING, SET_ROW_NIGHT, (int8_t)c };
+        }
+        return miss;
+      }
       // Toggle rows: the whole row is the target, at any x. The pill is an
       // affordance, not the hit area — a resistive-touch accommodation, and
       // consistent with the generous targets everywhere else here.
@@ -1297,7 +1412,7 @@ Hit screenHitTest(int16_t px, int16_t py) {
         int16_t x, y, w, h;
         btnRect(i, b, x, y, w, h);
         // Vertically the whole row band counts as the control strip: this is a
-        // bedroom device often used in the dark, so targets are 52px not 22px.
+        // bedroom device often used in the dark, so targets are 52px not 26px.
         // `i` already came from that band, so only px needs testing.
         if (px >= x && px < x + w) return { HIT_ROW, (int16_t)i, (int8_t)b };
       }

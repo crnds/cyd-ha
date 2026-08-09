@@ -4,7 +4,9 @@
 <style>
   body { background:#0e1116; color:#a6b0c2; font:13px/1.55 ui-monospace,Menlo,monospace;
          margin:0; padding:24px; display:flex; gap:28px; flex-wrap:wrap; }
-  canvas { image-rendering:pixelated; border:1px solid #2f343e; border-radius:8px; }
+  /* Square, like the panel it frames — a rounded bezel around a hard-cornered UI
+     misreports the one thing this file exists to show. Same for the buttons. */
+  canvas { image-rendering:pixelated; border:1px solid #2f343e; }
   h1 { font-size:13px; color:#f4f6fa; margin:0 0 6px; letter-spacing:.09em;
        text-transform:uppercase; }
   .panel { max-width:390px; }
@@ -12,7 +14,7 @@
   label { display:block; color:#707a8c; font-size:11px; letter-spacing:.08em;
           text-transform:uppercase; margin-bottom:4px; }
   input[type=range] { width:100%; }
-  button { background:#23272f; color:#a6b0c2; border:0; border-radius:6px;
+  button { background:#23272f; color:#a6b0c2; border:0;
            padding:6px 10px; font:inherit; cursor:pointer; margin:0 2px 3px 0; }
   button:hover { background:#18bcf2; color:#07090d; }
   #log { white-space:pre-wrap; color:#707a8c; font-size:11px; margin-top:12px; }
@@ -47,7 +49,8 @@
   </div>
   <div class="row">
     <label>Long device name &mdash; exercises textTrunc()</label>
-    <button onclick="dev[0].name='TRADFRI BULB 1';draw()">short</button>
+    <button onclick="dev[0].name='1';draw()">default</button>
+    <button onclick="dev[0].name='TRADFRI BULB 1';draw()">14 chars</button>
     <button onclick="dev[0].name='Bedside reading lamp, left';draw()">long</button>
     <button onclick="dev[0].name='Reading lamp (gy)';draw()">descenders</button>
   </div>
@@ -77,7 +80,7 @@
 // before spending a flash cycle.
 const SCR_W=320, SCR_H=240;
 const SP_1=4, SP_2=8, SP_3=12, SP_4=16, SP_6=24;
-const R_SM=6, R_LG=8;
+// No radius token: corners are square everywhere, so rect() takes no r.
 
 // header
 const STATUS_H=32, STATUS_ICO_W=26, TAB_X0=26, TAB_W=81, TAB_COUNT=3,
@@ -89,24 +92,37 @@ const TAB_UL_H=2, TAB_UL_Y=STATUS_DIV_Y-TAB_UL_H, TAB_UL_PAD=2, TAB_LBL_DX=SP_1,
 
 // body / cards
 const ROWS_Y0=32, ROW_H=52;
-const CARD_DY=3, CARD_H=ROW_H-2*CARD_DY, CARD_X=SP_2, CARD_W=SCR_W-2*SP_2,
+const CARD_DY=2, CARD_H=ROW_H-2*CARD_DY, CARD_X=SP_2, CARD_W=SCR_W-2*SP_2,
       CARD_PAD=SP_2, CARD_IN_X0=CARD_X+CARD_PAD, CARD_IN_X1=CARD_X+CARD_W-CARD_PAD-1,
       CARD_IN_W=CARD_W-2*CARD_PAD;
-const CARD_L1_CY=9, CARD_L1_Y=2, CARD_L1_H=19,
+// STACKED card internals — the AC card and the Settings brightness card. The
+// three bulb cards are inline and use the BULB_* block below.
+const CARD_L1_CY=8, CARD_L1_Y=1, CARD_L1_H=19,
       CARD_ICO_CX=CARD_X+15, CARD_ICO_R=7, CARD_TXT_X=CARD_X+28,
-      CTL_DY=21, CTL_H=22;
+      CTL_DY=20, CTL_H=26;
 
-// control grids
+// control grids. CHIP_* is the Settings brightness row alone now — the bulb rows
+// went inline and carry their own narrower chip, so the two pages no longer
+// share a pitch (43x40 against 54x26).
 const CHIP_W=54, CHIP_GAP=SP_1, CHIP_PITCH=CHIP_W+CHIP_GAP;
-const SW_X0=CARD_IN_X0+4*CHIP_PITCH-CHIP_GAP, SW_CELL_W=30, SW_R=11;
+// Bulb card, one inline row: 44 identity + 4*43 chips + 3*4 gaps + 2*30 swatches
+// = 288 = CARD_IN_W. The swatches did not move when the row went inline — the
+// identity column takes exactly what the four chips gave up, so SW_X0 is 244
+// either way.
+const BULB_ID_W=44, BULB_CTL_X0=CARD_IN_X0+BULB_ID_W, BULB_CHIP_W=43,
+      BULB_CHIP_PITCH=BULB_CHIP_W+CHIP_GAP,
+      BULB_NAME_W=BULB_CTL_X0-SP_1-CARD_TXT_X,
+      BULB_CTL_DY=4, BULB_CTL_H=CARD_H-2*BULB_CTL_DY;
+const SW_X0=BULB_CTL_X0+4*BULB_CHIP_PITCH-CHIP_GAP, SW_CELL_W=30, SW_R=13;
 const ACM_W=60, ACM_PITCH=ACM_W+CHIP_GAP,
       ACS_X0=CARD_IN_X0+3*ACM_PITCH-CHIP_GAP, ACS_BTN_W=28, ACS_VAL_W=44;
 
 // settings
 const SET_ROWS=4, SET_ROW_BRI=0, SET_ROW_NIGHT=1, SET_ROW_SCHED=2, SET_ROW_FLIP=3;
+const NIGHT_CHIPS=3;
 const SET_TITLE_CY=14, SET_CAP_CY=31;
 const TOGGLE_W=44, TOGGLE_H=24, TOGGLE_X=CARD_IN_X1-TOGGLE_W,
-      TOGGLE_DY=(CARD_H-TOGGLE_H)>>1;
+      TOGGLE_DY=(CARD_H-TOGGLE_H)>>1, TGL_PAD=3;
 
 // scenes
 const SCENE_COLS=3, SCENE_VIS_ROWS=3, SCENE_TILE_W=88, SCENE_TILE_H=64,
@@ -126,50 +142,132 @@ const KELVIN_WARM_MAX=2500, KELVIN_COOL_MIN=3700;
 const PAGE_DEVICES=0, PAGE_SCENES=1, PAGE_SETTINGS=2;
 const TAB_LABEL=['Devices','Scenes','Settings'];
 
-// ── TYPE: exact xAdvance tables from TFT_eSPI's GFXFF headers ─────────────────
-// Extracted from the font headers, so textW() here is BYTE-IDENTICAL to
-// tft.textWidth() on the device. That is what makes the clipping warnings below
-// trustworthy — the old simulator approximated Font 2 with 13px system-ui and
-// could neither confirm nor deny a 1px overflow.
-//   F_BODY  FreeSans9pt7b       ascent 13 descent 5
-//   F_TITLE FreeSansBold9pt7b   ascent 13 descent 5
-//   F_NUM   FreeSansBold12pt7b  ascent 17 descent 6
+// ── TYPE: exact width tables from TFT_eSPI's BUILT-IN bitmap fonts ────────────
+// Generated by scripts/font_metrics.py straight out of Font16.c / Font32rle.c,
+// so textW() here is BYTE-IDENTICAL to tft.textWidth() on the device. That is
+// what makes the clipping warnings below trustworthy — an earlier simulator
+// approximated with a CSS font and could neither confirm nor deny a 1px
+// overflow. Re-run the script if a role is ever pointed at a different face.
+//
+//   F_BODY   Font 2 (16px box)  ink cy-5..cy+7   baseline cy+5   caps 10px
+//   F_TITLE  Font 2 (16px box)  ink cy-5..cy+7   baseline cy+5   caps 10px
+//   F_NUM    Font 4 (26px box)  ink cy-8..cy+15  baseline cy+10  caps 18px
+//   F_MICRO  Font 1 (GLCD 6x8)  ink cy-4..cy+3   baseline cy+3   caps  7px
+//
+// BODY and TITLE are the SAME TABLE, and that is not a copy-paste slip: the
+// built-in set has no bold, so the two roles share Font 2 and the title/state
+// hierarchy is carried by colour tier alone. See src/ui/gfx.h.
 const ADV={
- BODY:[5,6,6,10,10,16,12,4,6,6,7,11,5,6,5,5,10,10,10,10,10,10,10,10,10,10,5,5,11,11,11,10,18,12,12,13,13,11,11,14,13,5,10,12,10,15,13,14,12,14,13,12,11,13,12,17,12,12,11,5,5,5,8,10,5,10,10,9,10,10,5,10,10,4,4,9,4,15,10,10,10,10,6,9,5,10,9,13,9,9,9,6,4,6,9],
- TITLE:[5,6,9,10,10,16,13,5,6,6,7,11,4,6,4,5,10,10,10,10,10,10,10,10,10,10,4,4,11,11,11,11,18,13,13,13,13,12,11,14,13,6,10,13,11,16,14,14,12,14,13,12,12,13,12,17,12,12,11,6,5,6,11,10,5,10,11,10,11,10,6,11,11,5,5,10,5,16,11,11,11,11,7,10,6,11,10,14,10,10,9,7,5,7,9],
- NUM:[7,8,11,13,13,21,17,6,8,8,9,14,6,8,6,7,13,14,13,13,13,13,13,13,13,13,6,6,14,14,14,15,23,17,17,17,17,16,15,18,18,7,14,17,15,21,18,19,16,19,17,16,15,18,16,23,16,15,15,8,7,8,14,13,6,14,15,13,15,14,8,15,14,7,7,14,6,21,15,15,15,15,9,13,8,15,13,19,13,13,12,9,7,9,12],
+ BODY:[6,3,4,9,8,9,9,3,7,7,8,6,3,6,5,7,8,8,8,8,8,8,8,8,8,8,3,3,6,6,6,8,9,8,8,8,8,8,8,8,8,4,8,8,7,10,8,8,8,8,8,8,8,8,8,10,8,8,8,4,7,4,7,9,5,7,7,7,7,7,6,7,7,4,5,6,4,8,7,8,7,8,6,6,5,7,8,8,6,7,7,5,3,5,8],
+ TITLE:[6,3,4,9,8,9,9,3,7,7,8,6,3,6,5,7,8,8,8,8,8,8,8,8,8,8,3,3,6,6,6,8,9,8,8,8,8,8,8,8,8,4,8,8,7,10,8,8,8,8,8,8,8,8,8,10,8,8,8,4,7,4,7,9,5,7,7,7,7,7,6,7,7,4,5,6,4,8,7,8,7,8,6,6,5,7,8,8,6,7,7,5,3,5,8],
+ NUM:[5,8,8,19,14,21,17,6,8,8,12,10,7,8,7,8,14,14,14,14,14,14,14,14,14,14,7,7,14,9,14,13,25,16,17,18,18,16,15,19,18,6,13,17,13,21,18,19,16,19,17,16,14,18,15,23,15,16,16,9,13,9,12,13,9,14,15,13,15,14,8,15,15,6,6,12,6,22,15,15,15,15,8,12,7,14,12,18,13,13,12,13,13,13,15],
 };
-const ASC={BODY:13,TITLE:13,NUM:17,MICRO:8};
-const DESC={BODY:5,TITLE:5,NUM:6,MICRO:0};
-// Cap heights are 13/13/18, so the CSS size is chosen to match cap height, not
-// em box: Helvetica caps are ~0.717em.
-const CSS={BODY:'18px Helvetica,Arial,sans-serif',
-           TITLE:'bold 18px Helvetica,Arial,sans-serif',
-           NUM:'bold 25px Helvetica,Arial,sans-serif',
-           MICRO:'8px ui-monospace,Menlo,monospace'};
+// Datum-relative ink extents and baselines, mirroring gfx.cpp's ROLE_INK_* after
+// its ROLE_DY offset is folded in. Not baseline-relative ascent/descent: a
+// built-in face's ink sits inset in the box TFT_eSPI centres, by a different
+// amount top and bottom, so "where does the ink start" has to be stated directly.
+const INK_TOP={BODY:-5,TITLE:-5,NUM:-8,MICRO:-4};
+const INK_BOT={BODY:7,TITLE:7,NUM:15,MICRO:3};
+const BASE={BODY:5,TITLE:5,NUM:10,MICRO:3};
+// Top of the GLYPH BOX relative to cy — i.e. TFT_eSPI's own datum arithmetic
+// (cy - height/2) with gfx.cpp's ROLE_DY already folded in. Everything else about
+// placement falls out of the glyph data, so this is the only positioning number.
+const BOXTOP={BODY:-8,TITLE:-8,NUM:-9,MICRO:-4};
+const ROLE_FONT={BODY:'F2',TITLE:'F2',NUM:'F4',MICRO:'F1'};
 
+// GENERATED by scripts/gen_sim_fonts.py — do not hand-edit.
+// Real glyph data for TFT_eSPI's built-in faces, so the canvas below draws
+// the same pixels the panel does. Font 2 is a row bitmap, Font 4 is 8-bit
+// RLE, Font 1 (GLCD) is 5 column bytes per char; all three decoders mirror
+// TFT_eSPI::drawChar. Chars 0x20..0x7E only — the UI draws nothing else.
+const GLYPHS={
+ F2:{h:16,w:[6,3,4,9,8,9,9,3,7,7,8,6,3,6,5,7,8,8,8,8,8,8,8,8,8,8,3,3,6,6,6,8,9,8,8,8,8,8,8,8,8,4,8,8,7,10,8,8,8,8,8,8,8,8,8,10,8,8,8,4,7,4,7,9,5,7,7,7,7,7,6,7,7,4,5,6,4,8,7,8,7,8,6,6,5,7,8,8,6,7,7,5,3,5,8],o:[0,16,32,48,64,80,96,112,128,144,160,176,192,208,224,240,256,272,288,304,320,336,352,368,384,400,416,432,448,464,480,496,512,528,544,560,576,592,608,624,640,656,672,688,704,720,752,768,784,800,816,832,848,864,880,896,928,944,960,976,992,1008,1024,1040,1056,1072,1088,1104,1120,1136,1152,1168,1184,1200,1216,1232,1248,1264,1280,1296,1312,1328,1344,1360,1376,1392,1408,1424,1440,1456,1472,1488,1504,1520,1536,1552],
+     d:"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"},
+ F4:{h:26,w:[5,8,8,19,14,21,17,6,8,8,12,10,7,8,7,8,14,14,14,14,14,14,14,14,14,14,7,7,14,9,14,13,25,16,17,18,18,16,15,19,18,6,13,17,13,21,18,19,16,19,17,16,14,18,15,23,15,16,16,9,13,9,12,13,9,14,15,13,15,14,8,15,15,6,6,12,6,22,15,15,15,15,8,12,7,14,12,18,13,13,12,13,13,13,15],o:[0,2,35,65,131,196,290,359,372,421,470,502,519,534,539,546,587,648,683,726,775,824,871,928,963,1020,1077,1090,1111,1131,1140,1160,1201,1320,1383,1444,1500,1566,1603,1640,1704,1773,1810,1855,1926,1963,2087,2180,2246,2295,2368,2433,2486,2521,2591,2658,2786,2853,2906,2943,2990,3041,3088,3108,3113,3139,3182,3245,3282,3345,3382,3419,3490,3553,3586,3631,3688,3725,3806,3859,3904,3967,4030,4059,4094,4129,4182,4229,4319,4366,4429,4456,4507,4558,4609,4634],
+     d:"fwEKgQWBBYEFgQWBBYEFgQWBBYEFgQWBBYEFgRWBBYEFgToJgAGAA4ABgAOAAYADgAGAA4ABgAOAAYADgAGAfxEugQGBDIACgA2AAoAMgQGBDIACgA2AAoAIjQiAAoANgAKADYACgAiNCIACgA2AAoAMgQGBDIACgA2AAoAMgQGBfw0UgAqDB4cEggGAAIIDgQKAAYEDgQKAAYICggGACIQJhAuDCYQIgAGCAYICgAKBAoECgAKBAoMAgAGCA4gGhAqAZy2CB4EFhgWABoECgQSBBYEEgQKBBoEEgQKAB4EEgQGBCIECgQKACYYBgAyCAoECggyAAYYJgAKBAoEIgQGBBIEHgAKBBIEGgQKBBIEFgQSBAoEGgAWGBYEHggeAfwwVhAqGCIICggeBBIEHgQSBB4EDggiBAYIKhAqDC4UDgQOCAYICgQKCA4IBgQKBBYQDgQaDA4EHgQSCBIUDiAGCA4UEgnYGggKCAoIEgAOBAoF0DYEFgAWBBYAFgQWBBYEEgQWBBYEFgQWBBYEFgQWBBYEFgQaBBYEFgQaABoEGgAaBBweBBoAGgQaABoEFgQWBBoEFgQWBBYEFgQWBBYEFgQWBBYEEgQWBBYEFgAWBBYAFgQ0QgQmBCYEGgAGBAYACiQOFBoMGgQGBBIIBggSAA4B/NlOBB4EHgQSHAYcEgQeBB4FncYIDggOCBYAEgQSABIEXWIUBhWhxggOCA4IyDYEFgQWABYEFgQWABYEFgQWABYEFgQWABYEFgQWABYEFgQWABYEFgS0ggweHBIMBgwOBBYECggWCAYEHgQGBB4EBgQeBAYEHgQGBB4EBgQeBAYEHgQGCBYICgQWBA4MBgwSHB4NmIoELgQqCB4UHhQuBC4ELgQuBC4ELgQuBC4ELgQuBC4ELgWYfhQWJA4IDggKCBoEBgQeBAYEHgQuBCoIIgweEBoQHgwiCCYIKgQuLAYtiH4UGhwSCA4IDgQWBAoIFgQuBCoIHhAiFC4ILgQGBB4EBgQeBAYIFggKCA4IDiQWFZSSBCoIJgwmDCIEAgQeBAYEGgQKBBoECgQWBA4EEgQSBA4EFgQOLAYsJgQuBC4ELgWQdiQOJA4ELgQuBC4EAhAWJAoMDggKBBoILgQuBC4EBgQeBAYIFggKCA4IDiQWFZSCEBogDggSBA4EGgQKBBoEBgQuBAYQEigKDA4ICggWCAYEHgQGBB4EBgQeBAoEFggKCA4IEiAWFZRyLAYsKgQqCCYIKgQqCCoEKgQuBCoIKgQuBC4EKgQuBC4FpIIMHhwWBA4EEgQWBA4EFgQOBBYEEgQOBBoUGhwSCA4ICgQeBAYEHgQGBB4EBgQeBAoIDggOJBYVlH4UFiASCA4ICggWBAoEHgQGBB4EBgQeBAYIFggKCA4MCigSEAYELgQGBBoECgQaBA4EEggOIBYZlK4IDggOCNIIDggOCMiuCA4IDgjSCA4IDggWABIEEgASBF2uCCIIHgweCCIENgg2CDIIMgn8MUYYBhhOGAYZjYoIMggyDDIINgQiCB4MHggiCfxUQhQSIA4IDggGCBYEBgQaBAYEGgQmCCIIIggiCCYEJggmCI4IJggmCXyGIDYIGggmCCoEHgQ2BBYEPgQSABoMBgAOBAoEEgQKDA4ECgQOBBIEEgQGBBIEEgQSBAYEDgQWBBIEBgQOBBYEEgQGBA4EEgQSBAoEDgQSBBIECgQOBBIEDgQSBA4ECggKBBYEEgwGEB4EXgReBC4EJggWDDYdsFYMLgwuDCoEBgQmBAYEJgQGBCIEDgQeBA4EHgQOBBoEFgQWBBYEFiQSLA4EHgQOBB4ECgQmBAYEJgQCCCYJvEooFjAOBB4IDgQiBA4EIgQOBCIEDgQiBA4EHggOKBYwDgQeCA4EJgQKBCYECgQmBAoEJgQKBB4IDjAOKeheGCIoFgwSDA4IIgQOBCoEBggqBAYEPgQ+BD4EPgQ+BC4EBggqBAoEJggKCCIEEgwSDBYoIhn8CE4kHiwWBBoMEgQiCA4EJgQOBCYICgQqBAoEKgQKBCoECgQqBAoEKgQKBCoECgQmCAoEJgQOBCIIDgQaDBIsFiX8DEYwCjAKBDYENgQ2BDYENgQ2LA4sDgQ2BDYENgQ2BDYENjAKMcBCLAosCgQyBDIEMgQyBDIEMigOKA4EMgQyBDIEMgQyBDIEMgXMYhgmKBoIFgwSCCIEEgQmCAoIPgRCBEIEFhwKBBYcCgQuBAoELgQKCCoEDgQmCA4IHgwSDBIQFiQCBB4UDgH8GE4EJgQOBCYEDgQmBA4EJgQOBCYEDgQmBA4EJgQONA40DgQmBA4EJgQOBCYEDgQmBA4EJgQOBCYEDgQmBA4EJgQOBCYF/B4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBKxWBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQGBBoEBgQaBAYEGgQGCBIICiASGXhKBCIICgQeCA4EGggSBBYIFgQSCBoEDggeBAoIIgQGCCYEAgwmHCIMBggeCA4IGgQWBBoEFggWBBoIEgQeCA4EIggKBCYJ2DoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBCoEKigGKWhaCCoIDgwiDA4MIgwODCIMDgQCBBoEAgQOBAIEGgQCBA4EAgQaBAIEDgQGBBIEBgQOBAYEEgQGBA4EBgQSBAYEDgQKBAoECgQOBAoECgQKBA4ECgQKBAoEDgQOBAIEDgQOBA4EAgQOBA4EDhAOBA4EEggSBA4EEggSBfxQTggiBA4IIgQODB4EDhAaBA4EAgQaBA4EAggWBA4EBggSBA4ECgQSBA4ECggOBA4EDggKBA4EEgQKBA4EEggGBA4EFggCBA4EGgQCBA4EGhAOBB4MDgQiCA4EIgn8YhgmKBoMEgwSCCIIDgQqBAoIKggGBDIEBgQyBAYEMgQGBDIEBgQyBAYEMgQGCCoICgQqBA4IIggSDBIMGigmGfwoRigSLA4EHggKBCIECgQiBAoEIgQKBCIECgQeCAosDigSBDYENgQ2BDYENgQ2BDYF7GIYJigaDBIMEggiCA4EKgQKCCoIBgQyBAYEMgQGBDIEBgQyBAYEMgQGBDIEBggaAAoICgQWCAYEDggWFBIMEgwaMB4YBghCAcxKLBIwDgQiCAoEJgQKBCYECgQmBAoEJgQKBCIEDjAOLBIEHggOBCIEDgQiCAoEJgQKBCYECgQmBAoEJgQKBCYF3FIUHiQSCBYIDgQeBA4EHgQOBB4ICgg2EC4YLhQyDDYIBggiBAoEIgQKBCIECgwWCA4oGhnMNmwWBC4ELgQuBC4ELgQuBC4ELgQuBC4ELgQuBC4ELgQuBZxOBCYEDgQmBA4EJgQOBCYEDgQmBA4EJgQOBCYEDgQmBA4EJgQOBCYEDgQmBA4EJgQOBCYEDgQmBA4IHggSCBYIGiQiHfwIOggiCAIEIgQGBCIEBgQiBAoEGgQOBBoEDgQaBBIEEgQWBBIEFgQSBBoECgQeBAoEHgQKBCIEAgQmBAIEJhAqCC4JuFoIGggaCAIEGggaBAYEGggaBAYIEgQCBBIICgQSBAIEEgQOBBIEAgQSBA4EEgQCBBIEDggKBAoECggSBAoECgQKBBYECgQKBAoEFgQKBAoECgQWCAIEEgQCCBoEAgQSBAIEHgQCBBIEAgQeBAIEEgQCBB4MGgwiCBoIJggaCfyUPgQiBAYIGggKBBoEEgQSBBYICggaBAoEIgQCBCYQKgguCCoEAgQiCAIIHgQKBBoEEgQSCBIIDgQaBAoIGggCCCIJoD4IJggCCB4ICgQeBA4IFggSBBYEGgQOBB4IBggiBAYEKgwuDDIENgQ2BDYENgQ2BDYENgXYRjAKMDIILgguCDIEMgQyCC4ILggyBDIEMgguCC4ILggyNAY1wC4QDhAOBBoEGgQaBBoEGgQaBBoEGgQaBBoEGgQaBBoEGgQaBBoEGgQaBBoQDhBIBgAuAC4ELgAuAC4ELgAuAC4ELgAuAC4ELgAuAC4ELgAuAC4ELgAuAC4ELgAuAC4ELgA4JhAOEBoEGgQaBBoEGgQaBBoEGgQaBBoEGgQaBBoEGgQaBBoEGgQaBBoEDhAOEFBCCB4EAgQWBAoEDgQSBAYEGgX9vf38djCYLgwOFAYIBggCBA4EAgQOBAIIBggGFA4N/GleFBYgEgQSCA4EFgQuBBYcDiQKCBYECgQaBAoEGgQKCA4MDhgCDAoQCgmEQgQyBDIEMgQyBDIEBgwaBAIYEhAGDA4IFgQOBBoICgQeBAoEHgQKBB4ECgQaCAoIFgQOEAYMDgQCGBIEBg21SgwaHA4MBggOBBYEBggmBCoEKgQqCBYECgQWBAoMBggSHBoNeGYEMgQyBDIEMgQaDAYEEhgCBA4MBhAOBBYICggaBAoEHgQKBB4ECgQeBAoIGgQOBBYIDgwGEBIYAgQaDAYFqWIMHhwSDAYMDgQWBAoIGgQGLAYsBgQuCC4EFggKDAYMEhweDZgqDAoQCgQWBBYEDhgCGAoEFgQWBBYEFgQWBBYEFgQWBBYEFgTtegwGBBIYAgQODAYQDgQWCAoEHgQKBB4ECgQeBAoEHgQKCBoEDgQWCA4MBhASGAIEGgwGBDIECgQeBAoEGggOCA4IEiQaFExCBDIEMgQyBDIEMgQGEBYEAhgSDA4IDggWBA4EGgQOBBoEDgQaBA4EGgQOBBoEDgQaBA4EGgQOBBoEDgQaBageBA4EDgQ+BA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBKweBA4EDgQ+BA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBA4EBgwGCCBmBCYEJgQmBCYEEggGBA4ICgQKCA4EBggSBAIIFhQWGBIIBgQSBAoIDgQOBA4EDggKBBIECgQSCUweBA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBA4EDgQOBA4EDgSt/BYEBgwODBYEAhQCGBIMChAKCA4IEggSBA4EFgQWBA4EFgQWBA4EFgQWBA4EFgQWBA4EFgQWBA4EFgQWBA4EFgQWBA4EFgQWBA4EFgQWBfxtbgQGEBYEAhgSDA4IDggWBA4EGgQOBBoEDgQaBA4EGgQOBBoEDgQaBA4EGgQOBBoEDgQaBal6EB4gEgwKDA4EGgQKCBoIBgQiBAYEIgQGBCIEBggaCAoEGgQODAoMEiAeEbVuBAYMGgQCGBIQBgwOCBYEDgQaCAoEHgQKBB4ECgQeBAoEGggKCBYEDhAGDA4EAhgSBAYMGgQyBDIEMgQyBKF6DAYEEhgCBA4MBhAOBBYICggaBAoEHgQKBB4ECgQeBAoIGgQOBBYIDgwGEBIYAgQaDAYEMgQyBDIEMgQyBHzGBAIIBhQGCBIEFgQWBBYEFgQWBBYEFgQWBBYE7SoQFhwKCA4ECgQWBAYEKhAeGB4QJgQGBBYEBggOCAocEhVYPgQSBBIEEgQKFAIUCgQSBBIEEgQSBBIEEgQSBBIEEgwOCMVWBBoECgQaBAoEGgQKBBoECgQaBAoEGgQKBBoECgQaBAoEGgQKBBYICggODA4YAgQSEAYFiR4EGgQCBBoEBgQSBAoEEgQKBBIEDgQKBBIECgQSBAoEFgQCBBoEAgQaEB4IIglhrgQSCBIEAgQSCBIEAgQSAAIAEgQGBAoEAgQKBAoECgQCBAoECgQKBAIECgQKBAoACgAKBA4EAgQKBAIEEgQCBAoEAgQSBAIECgQCBBYIEggaCBIIGggSCfwFOgQaBAYIEggKBBIEEgQKBBYIAggaECIIIhAaCAIIFgQKBBIEEgQKCBIIBgQaBW02CBoIAgQaBAYEGgQKBBIEDgQSBA4EEgQSBAoEFgQKBBYECgQaBAIEHgQCBB4EAgQiCCYIJggmBCYIGhAeDFEiJAYkIggeCB4IHggiBCIIHggeCB4IIiQGJVAaDB4IJgQqBCoEKgQqBCoEKgQqBCoEJgQiCC4ELgQqBCoEKgQqBCoEKgQqBCoEKggqDDgSBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBCoEKgQqBEgGDCoIKgQqBCoEKgQqBCoEKgQqBCoELgQuCCIEJgQqBCoEKgQqBCoEKgQqBCoEJggeDExGDCYEBgQeBA4IDgACABoEBgQCAB4N/fyw="},
+ F1:{h:8,d:"AAAAAAAAAF8AAAAHAAcAFH8UfxQkKn8qEiMTCGRiNklWIFAACAcDAAAcIkEAAEEiHAAqHH8cKggIPggIAIBwMAAICAgICAAAYGAAIBAIBAI+UUlFPgBCf0AAcklJSUYhQUlNMxgUEn8QJ0VFRTk8SklJMUEhEQkHNklJSTZGSUkpHgAAFAAAAEA0AAAACBQiQRQUFBQUAEEiFAgCAVkJBj5BXVlOfBIREnx/SUlJNj5BQUEif0FBQT5/SUlJQX8JCQkBPkFBUXN/CAgIfwBBf0EAIEBBPwF/CBQiQX9AQEBAfwIcAn9/BAgQfz5BQUE+fwkJCQY+QVEhXn8JGSlGJklJSTIDAX8BAz9AQEA/HyBAIB8/QDhAP2MUCBRjAwR4BANhWUlNQwB/QUFBAgQIECAAQUFBfwQCAQIEQEBAQEAAAwcIACBUVHhAfyhERDg4REREKDhERCh/OFRUVBgACH4JAhikpJx4fwgEBHgARH1AACBAQD0AfxAoRAAAQX9AAHwEeAR4fAgEBHg4REREOPwYJCQYGCQkGPx8CAQECEhUVFQkBAQ/RCQ8QEAgfBwgQCAcPEAwQDxEKBAoREyQkJB8RGRUTEQACDZBAAAAdwAAAEE2CAACAQIEAg=="},
+};
+
+for(const k of ['F2','F4','F1'])
+  GLYPHS[k].b=Uint8Array.from(atob(GLYPHS[k].d),c=>c.charCodeAt(0));
+
+// Decoded glyphs, memoised: the scene page at 100 tiles asks for the same
+// handful of characters hundreds of times per draw.
+const _gcache=new Map();
+function glyphRows(key,code){
+  const ck=key+code; let r=_gcache.get(ck);
+  if(r) return r;
+  const F=GLYPHS[key];
+  if(key==='F1'){
+    // GLCD: 5 column bytes, bit N = row N, plus the blank 6th column drawChar adds.
+    const o=(code-0x20)*5; r=[];
+    for(let y=0;y<8;y++){
+      const row=[];
+      for(let x=0;x<5;x++) row.push((F.b[o+x]>>y)&1);
+      row.push(0);
+      r.push(row);
+    }
+  } else if(key==='F2'){
+    // Row bitmap, MSB left, each row padded to (w+6)/8 bytes — drawChar's own
+    // odd rounding, not (w+7)/8.
+    const i=code-0x20, w=F.w[i], s=F.o[i], bpr=(w+6)>>3; r=[];
+    for(let y=0;y<F.h;y++){
+      const row=[];
+      for(let k=0;k<bpr;k++){
+        const b=F.b[s+y*bpr+k];
+        for(let j=7;j>=0;j--) row.push((b>>j)&1);
+      }
+      r.push(row.slice(0,w));
+    }
+  } else {
+    // Font 4: 8-bit RLE. High bit set => (b&0x7F)+1 ink pixels, else b+1 blank.
+    const i=code-0x20, w=F.w[i], e=F.o[i+1], px=[], total=w*F.h;
+    let p=F.o[i];
+    while(px.length<total && p<e){
+      const b=F.b[p++], n=(b&0x7F)+1;
+      for(let k=0;k<n;k++) px.push(b&0x80?1:0);
+    }
+    r=[];
+    for(let y=0;y<F.h;y++) r.push(px.slice(y*w,(y+1)*w));
+  }
+  _gcache.set(ck,r);
+  return r;
+}
+
+function advOf(role,code){
+  if(role==='MICRO') return 6;
+  const t=ADV[role], i=code-0x20;
+  return (i>=0&&i<t.length)?t[i]:0;
+}
 function textW(role,s){
   if(!s) return 0;
-  if(role==='MICRO') return s.length*6;
-  const t=ADV[role]; let w=0;
-  for(const ch of s){ const i=ch.charCodeAt(0)-0x20; w += (i>=0&&i<t.length)?t[i]:0; }
+  let w=0;
+  for(const ch of s) w+=advOf(role,ch.charCodeAt(0));
   return w;
 }
-// Draws char by char at the firmware's exact advances, so a string occupies the
-// same pixels here as on the panel even though the glyph shapes differ slightly.
-// TFT_eSPI centres free fonts on their ASCENT with an M* datum, which is why the
-// baseline is cy + ascent/2 rather than anything font-metric-derived.
+// Draws the panel's ACTUAL pixels: same glyph data, same decoders, same advances
+// as TFT_eSPI::drawChar. So unlike every previous version of this file, what you
+// see here is what the panel shows — not an outline face standing in for a
+// bitmap one. Runs of set pixels are coalesced into one fillRect per run.
 function gtext(role,s,x,cy,align,colour){
   if(!s) return 0;
   const w=textW(role,s);
   let sx = align==='right' ? x-w : align==='center' ? Math.round(x-w/2) : x;
-  const base = cy + (ASC[role]>>1);
-  g.fillStyle=colour; g.font=CSS[role]; g.textAlign='left'; g.textBaseline='alphabetic';
-  const t = role==='MICRO' ? null : ADV[role];
+  const key=ROLE_FONT[role], top=cy+BOXTOP[role];
+  g.fillStyle=colour;
   for(const ch of s){
-    g.fillText(ch,sx,base);
-    const i=ch.charCodeAt(0)-0x20;
-    sx += t ? ((i>=0&&i<t.length)?t[i]:0) : 6;
+    const code=ch.charCodeAt(0);
+    if(code>=0x20 && code<=0x7E){
+      const rows=glyphRows(key,code);
+      for(let y=0;y<rows.length;y++){
+        const row=rows[y]; let run=0;
+        for(let px=0;px<=row.length;px++){
+          if(px<row.length && row[px]) run++;
+          else if(run){ g.fillRect(sx+px-run,top+y,run,1); run=0; }
+        }
+      }
+    }
+    sx += advOf(role,code);
   }
   return w;
 }
@@ -201,26 +299,26 @@ function textTrunc(role,s,x,cy,maxW,colour,what){
 }
 
 // ── COLOUR: mirrors theme.h's THEME_LIST ─────────────────────────────────────
-// null night = derive by luminance (redOnly). The pinned reds exist because pure
-// luminance collapses pairs that must stay distinguishable.
+// null night/shift = derive (redOnly / warmShift). The pinned values exist
+// because a blanket derive collapses pairs that must stay distinguishable.
 const THEME_LIST=[
-  ['BG',      '#07090d', null],
-  ['SURFACE', '#16181d', null],
-  ['ELEVATED','#23272f', null],
-  ['BORDER',  '#2f343e', null],
-  ['DIVIDER', '#1c1f26', null],
-  ['TEXT',    '#f4f6fa', 0xC800],
-  ['TEXT2',   '#a6b0c2', 0xA000],
-  ['TEXT3',   '#707a8c', 0x8000],
-  ['DISABLED','#444c59', 0x6000],
-  ['DIM',     '#8a94a6', 0x3800],
-  ['ACCENT',  '#18bcf2', null],
-  ['NEUTRAL', '#7a828e', 0x6800],
-  ['SUCCESS', '#2fd97c', 0x5000],
-  ['WARNING', '#f5a524', 0xB000],
-  ['ERROR',   '#ff4d6a', 0xF800],
-  ['WARM',    '#ffb05c', 0x7000],
-  ['COOL',    '#a6cdff', 0xD800],
+  ['BG',      '#07090d', null,   null],
+  ['SURFACE', '#16181d', null,   null],
+  ['ELEVATED','#23272f', null,   null],
+  ['BORDER',  '#2f343e', null,   null],
+  ['DIVIDER', '#1c1f26', null,   null],
+  ['TEXT',    '#f4f6fa', 0xC800, 0xF363],
+  ['TEXT2',   '#a6b0c2', 0xA000, 0xA282],
+  ['TEXT3',   '#707a8c', 0x8000, 0x71A1],
+  ['DISABLED','#444c59', 0x6000, 0x4101],
+  ['DIM',     '#8a94a6', 0x3800, 0x8A02],
+  ['ACCENT',  '#18bcf2', null,   0x18E6],
+  ['NEUTRAL', '#7a828e', 0x6800, 0x79C1],
+  ['SUCCESS', '#2fd97c', 0x5000, 0x2B01],
+  ['WARNING', '#f5a524', 0xB000, 0xF240],
+  ['ERROR',   '#ff4d6a', 0xF800, 0xF901],
+  ['WARM',    '#ffb05c', 0x7000, 0xFA81],
+  ['COOL',    '#a6cdff', 0xD800, 0xA2E3],
 ];
 const to565=h=>((parseInt(h.slice(1,3),16)&0xF8)<<8)|
                ((parseInt(h.slice(3,5),16)&0xFC)<<3)|
@@ -238,10 +336,26 @@ function redOnly(c){
         b8=Math.floor(((c&0x1F)*255+15)/31);
   return (Math.floor((r8*299+g8*587+b8*114)/1000)&0xF8)<<8;
 }
+// Byte-for-byte the firmware's warmShift(): green/blue scaled down, red
+// passed through unscaled. NIGHT_SHIFT_GREEN_PCT/BLUE_PCT must stay in sync
+// with theme.cpp — the pinned shift overrides above were computed at these.
+const NIGHT_SHIFT_GREEN_PCT=45, NIGHT_SHIFT_BLUE_PCT=10;
+function warmShift(c){
+  const r5=(c>>11)&0x1F,
+        g8=Math.floor((((c>>5)&0x3F)*255+31)/63),
+        b8=Math.floor(((c&0x1F)*255+15)/31);
+  const g6=((Math.floor(g8*NIGHT_SHIFT_GREEN_PCT/100))&0xFC)>>2,
+        b5=((Math.floor(b8*NIGHT_SHIFT_BLUE_PCT/100))&0xF8)>>3;
+  return (r5<<11)|(g6<<5)|b5;
+}
 let C={};
-function applyTheme(night){
-  for(const [name,day,ovr] of THEME_LIST)
-    C[name] = night ? from565(ovr===null?redOnly(to565(day)):ovr) : day;
+// mode: 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
+function applyTheme(mode){
+  for(const [name,day,ovr,shiftOvr] of THEME_LIST){
+    if(mode===1)      C[name]=from565(ovr===null?redOnly(to565(day)):ovr);
+    else if(mode===2) C[name]=from565(shiftOvr===null?warmShift(to565(day)):shiftOvr);
+    else              C[name]=day;
+  }
 }
 // The night ladder assertion theme.h's comment claims. Collisions are the real
 // failure — a pair that must be told apart landing on one value — so those are
@@ -267,6 +381,29 @@ function checkNightLadder(){
   }
   return Object.keys(lvl).sort((a,b)=>lvl[a]-lvl[b]).map(k=>`${k} ${lvl[k]}`).join(' < ');
 }
+// Shift's output is NOT monochrome (unlike redOnly()'s), so a single red-level
+// ladder can't certify it: WARM/COOL are told apart mainly by the red channel
+// despite similar luminance, while DIM/ERROR differ by hue at a small
+// luminance gap. Check (a) all 17 values pairwise-unique and (b) a per-channel
+// delta on the same MUST_DIFFER pairs, not a single blended number.
+function checkShiftDistinct(){
+  const val={};
+  for(const [name,day,,shiftOvr] of THEME_LIST)
+    val[name]=shiftOvr===null?warmShift(to565(day)):shiftOvr;
+  const seen={};
+  for(const k in val){
+    if(seen[val[k]]!==undefined) warn(`shift palette: ${k} and ${seen[val[k]]} collide at 0x${val[k].toString(16)}`);
+    seen[val[k]]=k;
+  }
+  for(const [a,b] of MUST_DIFFER){
+    const ca=val[a], cb=val[b];
+    const dR=Math.abs(((ca>>11)&0x1F)-((cb>>11)&0x1F));
+    const dG=Math.abs(((ca>>5)&0x3F)-((cb>>5)&0x3F));
+    const dB=Math.abs((ca&0x1F)-(cb&0x1F));
+    if(Math.max(dR,dG,dB)<4) warn(`shift palette: ${a} and ${b} differ by at most dR=${dR} dG=${dG} dB=${dB} — too close on every channel`);
+  }
+  return Object.keys(val).map(k=>`${k} 0x${val[k].toString(16).padStart(4,'0')}`).join('  ');
+}
 
 function mix(a,b,t){
   const p=h=>[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
@@ -281,7 +418,8 @@ const BULB_LABEL=['OFF','1%','30%','100%',null,null];
 const BULB_LABEL_ALT=['OFF','1','30','100',null,null];
 const AC_LABEL=['OFF','COOL','DRY',null,null,null];
 const SET_LABEL=['Brightness','Night mode','Night schedule','Flip screen'];
-const SET_CAPTION=[null,'Red display, 1% backlight','23:45 - 08:00','Rotate 180 degrees'];
+const SET_CAPTION=[null,null,'23:45 - 08:00','Rotate 180 degrees'];
+const NIGHT_LABEL=['OFF','SHIFT','RED'];
 
 const SB_OFF={on:false}, SB_MIDW={on:true,pct:BRI_MID,kelvin:KELVIN_WARM},
       SB_HIW={on:true,pct:BRI_HIGH,kelvin:KELVIN_WARM},
@@ -308,12 +446,14 @@ const sceneRowsN=()=>Math.ceil(SCENE.length/SCENE_COLS);
 const sceneMaxRow=()=>Math.max(0, sceneRowsN()-SCENE_VIS_ROWS);
 
 let stale=false, haOk=true, wifiOk=true, page=PAGE_DEVICES, sceneRow=0, errAt=0;
-let set={briIdx:2, night:false, nightSched:true, flip:false};
+// nightMode: 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
+const NIGHT_CHIP_MODE=[0,2,1];   // chip position -> mode: Off, Shift, Red
+let set={briIdx:2, nightMode:0, nightSched:true, flip:false};
 let dev=[
-  {name:'TRADFRI BULB 1', kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
-  {name:'TRADFRI BULB 2', kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
-  {name:'TRADFRI BULB 3', kind:'light',   on:true,  pct:100, kelvin:4000, ct:true, known:true, avail:true},
-  {name:'SENSIBO SKY AC', kind:'climate', mode:'cool', target:24, room:27, known:true, avail:true},
+  {name:'1',  kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
+  {name:'2',  kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
+  {name:'3',  kind:'light',   on:true,  pct:100, kelvin:4000, ct:true, known:true, avail:true},
+  {name:'AC', kind:'climate', mode:'cool', target:24, room:27, humidity:55, known:true, avail:true},
 ];
 const AC_MODES=['off','cool','dry','heat'];
 function cycleMode(){ const d=dev[3]; d.mode=AC_MODES[(AC_MODES.indexOf(d.mode)+1)%AC_MODES.length]; draw(); }
@@ -336,19 +476,26 @@ const sceneTileY = s => ROWS_Y0+Math.floor(s/SCENE_COLS)*SCENE_PITCH_Y;
 
 // The one function that knows the two row kinds lay out the same six slots
 // differently — including the AC stepper's reversed slot order (5 left, 3 right).
+// They now differ in y as well: a bulb row is inline, so its controls take the
+// card's full height beside the identity column, where the AC's sit in the 26px
+// strip under its state line.
 function btnRect(i,b){
-  const y=cardTop(i)+CTL_DY, h=CTL_H;
   if(dev[i].kind==='climate'){
+    const y=cardTop(i)+CTL_DY, h=CTL_H;
     if(b<3) return {x:CARD_IN_X0+b*ACM_PITCH, y, w:ACM_W, h};
     if(b===AC_BTN_TDN)  return {x:ACS_X0,                       y, w:ACS_BTN_W, h};
     if(b===AC_BTN_TEMP) return {x:ACS_X0+ACS_BTN_W,             y, w:ACS_VAL_W, h};
     return {x:ACS_X0+ACS_BTN_W+ACS_VAL_W,                       y, w:ACS_BTN_W, h};
   }
-  if(b<4) return {x:CARD_IN_X0+b*CHIP_PITCH, y, w:CHIP_W, h};
+  const y=cardTop(i)+BULB_CTL_DY, h=BULB_CTL_H;
+  if(b<4) return {x:BULB_CTL_X0+b*BULB_CHIP_PITCH, y, w:BULB_CHIP_W, h};
   return {x:SW_X0+(b-4)*SW_CELL_W, y, w:SW_CELL_W, h};
 }
 function briRect(b){
   return {x:CARD_IN_X0+b*CHIP_PITCH, y:cardTop(SET_ROW_BRI)+CTL_DY, w:CHIP_W, h:CTL_H};
+}
+function nightRect(c){
+  return {x:CARD_IN_X0+c*CHIP_PITCH, y:cardTop(SET_ROW_NIGHT)+CTL_DY, w:CHIP_W, h:CTL_H};
 }
 
 function pctMatches(want,got){
@@ -387,13 +534,17 @@ function sceneActive(idx){
 }
 
 // ── primitives ───────────────────────────────────────────────────────────────
-function roundRect(x,y,w,h,r,fill,stroke){
-  g.beginPath(); g.moveTo(x+r,y);
-  g.arcTo(x+w,y,x+w,y+h,r); g.arcTo(x+w,y+h,x,y+h,r);
-  g.arcTo(x,y+h,x,y,r);     g.arcTo(x,y,x+w,y,r);
-  g.closePath();
-  if(fill){ g.fillStyle=fill; g.fill(); }
-  if(stroke&&stroke!==fill){ g.strokeStyle=stroke; g.lineWidth=1; g.stroke(); }
+// Every container and control on the panel is a plain rect — there is no radius
+// token any more, so this replaced roundRect() outright rather than taking a 0.
+// The stroke is inset by half a pixel so a 1px border lands ON x..x+w-1 exactly
+// like TFT_eSPI's drawRect, instead of straddling the boundary and coming out
+// two antialiased rows wide at S=3.
+function rect(x,y,w,h,fill,stroke){
+  if(fill){ g.fillStyle=fill; g.fillRect(x,y,w,h); }
+  if(stroke&&stroke!==fill){
+    g.strokeStyle=stroke; g.lineWidth=1;
+    g.strokeRect(x+.5,y+.5,w-1,h-1);
+  }
 }
 function disc(cx,cy,r,fill,stroke){
   g.beginPath(); g.arc(cx,cy,r,0,7);
@@ -415,19 +566,19 @@ function ctlColour(vis){
     case 'pressed':  return {fill:C.TEXT,     edge:C.TEXT,     fg:C.BG};
     case 'active':   return {fill:C.ACCENT,   edge:C.ACCENT,   fg:C.BG};
     case 'activeOff':return {fill:C.NEUTRAL,  edge:C.NEUTRAL,  fg:C.BG};
-    case 'disabled': return {fill:C.SURFACE,  edge:C.SURFACE,  fg:C.DISABLED};
-    case 'err':      return {fill:C.SURFACE,  edge:C.ERROR,    fg:C.ERROR};
+    case 'disabled': return {fill:C.BG,       edge:C.BG,       fg:C.DISABLED};
+    case 'err':      return {fill:C.BG,       edge:C.ERROR,    fg:C.ERROR};
     default:         return {fill:C.ELEVATED, edge:C.ELEVATED, fg:C.TEXT2};
   }
 }
 function wChip(r,label,alt,vis,what){
   const c=ctlColour(vis);
-  roundRect(r.x,r.y,r.w,r.h,R_SM,c.fill,c.edge);
+  rect(r.x,r.y,r.w,r.h,c.fill,c.edge);
   textFit('BODY',label,alt,r.x+r.w/2,r.y+r.h/2,r.w-2*SP_1,c.fg,what);
 }
 function wStepBtn(r,up,vis){
   const c=ctlColour(vis==='active'?'inactive':vis);
-  roundRect(r.x,r.y,r.w,r.h,R_SM,c.fill,c.edge);
+  rect(r.x,r.y,r.w,r.h,c.fill,c.edge);
   icoChevron(r.x+r.w/2,r.y+r.h/2,up,c.fg,6,4);
 }
 function wSwatch(cx,cy,r,colour,vis){
@@ -437,9 +588,20 @@ function wSwatch(cx,cy,r,colour,vis){
   else { disc(cx,cy,r-2,tint(colour)); disc(cx,cy,r-2,null,mix(C.BG,colour,150/255)); }
 }
 function wToggle(x,y,w,h,on){
-  const r=h/2;
-  if(on){ roundRect(x,y,w,h,r,C.ACCENT,C.ACCENT); disc(x+w-r,y+r,r-3,C.BG); }
-  else  { roundRect(x,y,w,h,r,C.ELEVATED,C.ELEVATED); disc(x+r,y+r,r-3,C.TEXT3); }
+  const k=h-2*TGL_PAD;                 // square knob in a square track
+  if(on){ rect(x,y,w,h,C.ACCENT,null);   rect(x+w-TGL_PAD-k,y+TGL_PAD,k,k,C.BG,null); }
+  else  { rect(x,y,w,h,C.ELEVATED,null); rect(x+TGL_PAD,y+TGL_PAD,k,k,C.TEXT3,null); }
+}
+// Mirrors the firmware's snprintf("%.0f", target). String(d.target) is NOT the
+// same thing: a 0.5 target_temp_step is real (the poll carries tenths precisely
+// so a 24.5 setpoint survives), and the panel draws that as "24" while
+// String() would draw "24.5" and report a false 58px-of-44px overflow.
+// C's %.0f rounds half to EVEN, so 24.5 -> "24" and 25.5 -> "26"; Math.round
+// would give 25 and 26 and disagree on exactly the values that occur.
+function fmt0(v){
+  const f=Math.floor(v), d=v-f;
+  const n = d>0.5 ? f+1 : d<0.5 ? f : (f%2===0 ? f : f+1);
+  return String(n);
 }
 function wValue(r,val,degree,fg,bg){
   g.fillStyle=bg; g.fillRect(r.x,r.y,r.w,r.h);
@@ -448,7 +610,7 @@ function wValue(r,val,degree,fg,bg){
   if(vw+degW>r.w) warn(`AC setpoint "${val}" needs ${vw+degW}px of ${r.w}px`);
   gtext('NUM',val,bx,cy,'left',fg);
   if(degree){
-    const ry=cy-(ASC.NUM>>1)+3;
+    const ry=cy+INK_TOP.NUM+3;
     disc(bx+vw+5,ry,3,null,fg); disc(bx+vw+5,ry,2,null,fg);
   }
 }
@@ -536,10 +698,10 @@ function iconVis(d,stale){
   else {
     const hue=bulbHue(d);
     v={shape:'bulbOn',
-       colour:(d.pct>=0&&d.pct<BRI_HIGH)?mix(C.SURFACE,hue,(70+d.pct*185/100)/255):hue};
+       colour:(d.pct>=0&&d.pct<BRI_HIGH)?mix(C.BG,hue,(70+d.pct*185/100)/255):hue};
   }
   // Same fail-soft rule as the state text: keep the reading, dim it once stale.
-  if(stale) v.colour=mix(C.SURFACE,v.colour,110/255);
+  if(stale) v.colour=mix(C.BG,v.colour,110/255);
   return v;
 }
 function drawIcon(v,cx,cy){
@@ -554,41 +716,63 @@ function drawIcon(v,cx,cy){
 function prettyMode(m){
   return {heat:'HEAT',fan_only:'FAN',auto:'AUTO',unavailable:'UNAVAIL'}[m] || (m||'?');
 }
+// AC ONLY. The bulb cards went inline and dropped their state line, so the
+// branch that produced "30%  2700K" / "Off" is gone rather than left unreachable.
 function stateText(d){
   if(!d.known) return {s:'--',deg:false};
-  // "OFFLINE", not "UNAVAILABLE": 75px against 122px, which is what keeps a
-  // 14-character device name from being truncated in the one state where the
-  // name still matters for identifying WHICH device went away.
+  // "OFFLINE", not "UNAVAILABLE": 75px against 122px, which is what keeps a long
+  // device name from being truncated in the one state where the name still
+  // matters for identifying WHICH device went away.
   if(!d.avail) return {s:'OFFLINE',deg:false};
-  if(d.kind==='climate'){
-    const charted = d.mode==='off'||d.mode==='cool'||d.mode==='dry';
-    // An exceptional mode drops the "Room" label rather than the device name.
-    if(d.room!=null)
-      return {s: charted?`Room ${d.room}`:`${prettyMode(d.mode)}  ${d.room}`, deg:true};
-    return {s: charted?'':prettyMode(d.mode), deg:false};
-  }
-  if(!d.on) return {s:'Off',deg:false};
-  if(d.pct>=0) return {s: d.ct&&d.kelvin>0?`${d.pct}%  ${d.kelvin}K`:`${d.pct}%`, deg:false};
-  return {s:'On',deg:false};
+  const charted = d.mode==='off'||d.mode==='cool'||d.mode==='dry';
+  // An exceptional mode drops the "Room" label rather than the device name.
+  if(d.room!=null)
+    return {s: charted?`Room ${d.room}`:`${prettyMode(d.mode)}  ${d.room}`, deg:true};
+  return {s: charted?'':prettyMode(d.mode), deg:false};
+}
+// Trails the room reading, right of the degree ring. Shown whenever a reading
+// exists — independent of stateText()'s `deg`, since humidity is still worth a
+// card even in an exceptional mode where the room temperature itself was
+// dropped for the mode name.
+function humidityText(d){
+  if(!d.known||!d.avail||d.humidity==null) return '';
+  return `${d.humidity}%`;
 }
 
 // ── pages ────────────────────────────────────────────────────────────────────
 function drawDevices(){
   dev.forEach((d,i)=>{
-    const top=cardTop(i), err=isErr();
-    roundRect(CARD_X,top,CARD_W,CARD_H,R_LG,C.SURFACE,err?C.ERROR:C.BORDER);
+    const top=cardTop(i), err=isErr(), ac=(d.kind==='climate');
+    // The outline is the card's alarm channel: a failed call flashes it, and an
+    // OFFLINE device holds it. That second use is what replaced the word on the
+    // bulb cards when their state line went away.
+    const alarm=err||!d.avail;
+    rect(CARD_X,top,CARD_W,CARD_H,C.BG,alarm?C.ERROR:C.BORDER);
 
-    drawIcon(iconVis(d,stale),CARD_ICO_CX,top+CARD_L1_CY);
+    // The AC's identity is the top line of a stacked card; a bulb's is centred in
+    // the single inline row, beside its controls.
+    const idCy=top+(ac?CARD_L1_CY:CARD_H/2);
+    drawIcon(iconVis(d,stale),CARD_ICO_CX,idCy);
 
-    const st=stateText(d);
+    const st=ac?stateText(d):{s:'',deg:false};
+    const hum=ac?humidityText(d):'';
     const stFg=(err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT2);
-    const stW=textW('BODY',st.s)+(st.deg?9:0);
-    textTrunc('TITLE',d.name,CARD_TXT_X,top+CARD_L1_CY,
-              CARD_IN_X1-CARD_TXT_X-stW-SP_2, stale?C.DIM:C.TEXT, `row ${i} name`);
+    // Humidity sits right of the room reading's degree ring, sharing stFg —
+    // mirrors drawDeviceCard()'s stW/stEndX split in screen.cpp.
+    const humW=hum?textW('BODY',hum):0, humGap=hum?SP_2:0;
+    const stW=textW('BODY',st.s)+(st.deg?9:0)+humGap+humW;
+    const stEndX=CARD_IN_X1-humGap-humW;
+    // A bulb has no state beside it, so its name budget is the fixed identity
+    // column rather than whatever the state text leaves. It also takes the alarm
+    // colour, being the only text left on that card.
+    textTrunc('TITLE',d.name,CARD_TXT_X,idCy,
+              ac?CARD_IN_X1-CARD_TXT_X-stW-SP_2:BULB_NAME_W,
+              (!ac&&alarm)?C.ERROR:(stale?C.DIM:C.TEXT), `row ${i} name`);
     if(st.s){
-      gtext('BODY',st.s,CARD_IN_X1-(st.deg?9:0),top+CARD_L1_CY,'right',stFg);
-      if(st.deg) disc(CARD_IN_X1-3,top+CARD_L1_CY-(ASC.BODY>>1)+2,2,null,stFg);
+      gtext('BODY',st.s,stEndX-(st.deg?9:0),idCy,'right',stFg);
+      if(st.deg) disc(stEndX-3,idCy+INK_TOP.BODY+2,2,null,stFg);
     }
+    if(hum) gtext('BODY',hum,CARD_IN_X1,idCy,'right',stFg);
 
     for(let b=0;b<btnCount(d);b++){
       const r=btnRect(i,b), isSw=(d.kind==='light'&&b>=4);
@@ -600,8 +784,8 @@ function drawDevices(){
         if(b===AC_BTN_TUP||b===AC_BTN_TDN) wStepBtn(r,b===AC_BTN_TUP,vis);
         else if(b===AC_BTN_TEMP){
           const known=d.known&&d.avail&&d.target!=null;
-          wValue(r,known?String(d.target):'--',known,
-                 (err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT),C.SURFACE);
+          wValue(r,known?fmt0(d.target):'--',known,
+                 (err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT),C.BG);
         }
         else wChip(r,AC_LABEL[b],null,vis,`AC chip ${b}`);
       }
@@ -623,7 +807,7 @@ function drawSceneTile(slot,idx){
   else if(sceneActive(idx)){ fill=tint(C.ACCENT); edge=C.ACCENT; fg=C.ACCENT; mono=false; }
   else { fill=C.SURFACE; edge=C.BORDER; fg=C.TEXT2; mono=false; }
 
-  roundRect(x,y,SCENE_TILE_W,SCENE_TILE_H,R_LG,fill,edge);
+  rect(x,y,SCENE_TILE_W,SCENE_TILE_H,fill,edge);
 
   const sc=SCENE[idx], cx=x+SCENE_TILE_W/2, py=y+SCENE_PIP_DY;
   for(let i=0;i<NUM_BULBS;i++){
@@ -652,7 +836,7 @@ function drawSceneScrollbar(){
   g.fillStyle=C.DIVIDER; g.fillRect(cx,tY,1,tH);
   let th=Math.floor(tH*SCENE_VIS_ROWS/sceneRowsN());
   if(th<10) th=10;
-  roundRect(cx-2,tY+Math.floor((tH-th)*sceneRow/maxRow),5,th,2,C.ACCENT,null);
+  rect(cx-2,tY+Math.floor((tH-th)*sceneRow/maxRow),5,th,C.ACCENT,null);
 }
 
 function drawScenes(){
@@ -661,9 +845,9 @@ function drawScenes(){
   drawSceneScrollbar();
 }
 
+// Night mode is chip-driven now, not a toggle — no case for it here.
 function setToggleVal(r){
-  return r===SET_ROW_NIGHT?set.night : r===SET_ROW_SCHED?set.nightSched
-       : r===SET_ROW_FLIP ?set.flip  : false;
+  return r===SET_ROW_SCHED?set.nightSched : r===SET_ROW_FLIP?set.flip : false;
 }
 function setIcon(row,cx,cy){
   if(row===SET_ROW_BRI)        icoSun(cx,cy,C.TEXT2);
@@ -674,7 +858,7 @@ function setIcon(row,cx,cy){
 function drawSettings(){
   for(let r=0;r<SET_ROWS;r++){
     const top=cardTop(r);
-    roundRect(CARD_X,top,CARD_W,CARD_H,R_LG,C.SURFACE,C.BORDER);
+    rect(CARD_X,top,CARD_W,CARD_H,C.SURFACE,C.BORDER);
     if(r===SET_ROW_BRI){
       setIcon(r,CARD_ICO_CX,top+CARD_L1_CY);
       gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+CARD_L1_CY,'left',C.TEXT);
@@ -683,6 +867,14 @@ function drawSettings(){
         const q=briRect(b);
         wChip(q,BRI_LABEL[b],null,b===set.briIdx?'active':'inactive',`brightness ${b}`);
         if(q.x+q.w-1>CARD_IN_X1) warn(`brightness ${b} runs past the card inner edge (${q.x+q.w-1} > ${CARD_IN_X1})`);
+      }
+    } else if(r===SET_ROW_NIGHT){
+      setIcon(r,CARD_ICO_CX,top+CARD_L1_CY);
+      gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+CARD_L1_CY,'left',C.TEXT);
+      for(let c=0;c<NIGHT_CHIPS;c++){
+        const q=nightRect(c);
+        wChip(q,NIGHT_LABEL[c],null,NIGHT_CHIP_MODE[c]===set.nightMode?'active':'inactive',`night ${c}`);
+        if(q.x+q.w-1>CARD_IN_X1) warn(`night mode chip ${c} runs past the card inner edge (${q.x+q.w-1} > ${CARD_IN_X1})`);
       }
     } else {
       setIcon(r,CARD_ICO_CX,top+CARD_H/2);
@@ -698,8 +890,9 @@ function drawSettings(){
 
 function draw(){
   warnings=[];
-  applyTheme(set.night);
+  applyTheme(set.nightMode);
   const ladder=checkNightLadder();
+  const shiftLadder=checkShiftDistinct();
   g.fillStyle=C.BG; g.fillRect(0,0,SCR_W,SCR_H);
 
   // header: glyph | tabs | clock, tiling the bar exactly
@@ -735,8 +928,8 @@ function draw(){
   // Two things the compiler cannot see. The label's descenders must stop above the
   // bar ("Settings" has a g), and the widest label plus its bleed must still fit
   // the cell, or the bar would be clamped and stop tracking the word.
-  if(STATUS_CY+(ASC.BODY>>1)+DESC.BODY >= TAB_UL_Y)
-    warn(`tab label descenders reach y${STATUS_CY+(ASC.BODY>>1)+DESC.BODY}, underline starts y${TAB_UL_Y}`);
+  if(STATUS_CY+INK_BOT.BODY >= TAB_UL_Y)
+    warn(`tab label descenders reach y${STATUS_CY+INK_BOT.BODY}, underline starts y${TAB_UL_Y}`);
   for(const t of TAB_LABEL){
     if(textW('BODY',t)+2*TAB_UL_PAD > TAB_W)
       warn(`tab "${t}" underline (${textW('BODY',t)+2*TAB_UL_PAD}px) is wider than its ${TAB_W}px cell`);
@@ -747,30 +940,61 @@ function draw(){
     warn(`rows do not fill the body (${ROWS_Y0+NUM_DEVICES*ROW_H} of ${SCR_H})`);
   if(CARD_L1_Y+CARD_L1_H>CTL_DY) warn('card line 1 overlaps the control row');
   if(CTL_DY+CTL_H>CARD_H) warn('control row overruns the card');
-  if(CARD_IN_X0+4*CHIP_PITCH-CHIP_GAP+2*SW_CELL_W!==CARD_IN_X1+1)
-    warn('bulb control row does not fill the card');
+  if(BULB_CTL_X0+4*BULB_CHIP_PITCH-CHIP_GAP+2*SW_CELL_W!==CARD_IN_X1+1)
+    warn('bulb row does not fill the card');
+  if(BULB_CTL_DY+BULB_CTL_H>CARD_H) warn('inline bulb control row overruns the card');
+  if(BULB_NAME_W<=0) warn('bulb identity column has no room for a name');
+  // The inline row puts the icon and the name INSIDE the band the controls
+  // occupy, so both have to fit it vertically — a check the stacked card never
+  // needed, because its line had a whole strip to itself.
+  {
+    const cy=CARD_H/2;
+    if(cy-CARD_ICO_R<BULB_CTL_DY || cy+CARD_ICO_R>=BULB_CTL_DY+BULB_CTL_H)
+      warn(`bulb icon (y+${cy-CARD_ICO_R}..${cy+CARD_ICO_R}) leaves its row band y+${BULB_CTL_DY}..${BULB_CTL_DY+BULB_CTL_H-1}`);
+    if(cy+INK_TOP.TITLE<BULB_CTL_DY || cy+INK_BOT.TITLE>=BULB_CTL_DY+BULB_CTL_H)
+      warn(`bulb name ink (y+${cy+INK_TOP.TITLE}..${cy+INK_BOT.TITLE}) leaves its row band`);
+    // The identity column's clear rect must stop before the first chip, or a
+    // repaint of the name would wipe a chip nothing is going to redraw.
+    if(CARD_IN_X0+BULB_ID_W>BULB_CTL_X0)
+      warn('bulb identity clear rect overlaps the first chip');
+  }
+  // Every bulb chip label has to fit the narrower inline chip, which is the one
+  // thing the width reduction could actually break. textFit() would fall back to
+  // BULB_LABEL_ALT and then to F_MICRO, so this is a warning about a silent
+  // downgrade rather than about clipping.
+  for(const l of BULB_LABEL) if(l && textW('BODY',l)>BULB_CHIP_W-2*SP_1)
+    warn(`bulb chip "${l}" (${textW('BODY',l)}px) exceeds its ${BULB_CHIP_W-2*SP_1}px label budget`);
   if(ACS_X0+2*ACS_BTN_W+ACS_VAL_W!==CARD_IN_X1+1)
     warn('AC control row does not fill the card');
   if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H!==SCR_H)
     warn(`scene grid does not fill the body (${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H} of ${SCR_H})`);
   if(SCENE_X0+(SCENE_COLS-1)*SCENE_PITCH_X+SCENE_TILE_W>SCENE_SB_X0)
     warn('scene grid overlaps the scroll gutter');
-  // Descenders must stop before the control row, or a lowercase device name
-  // clips into the chips. This is why CARD_L1_CY is 9 and not 10.
-  if(CARD_L1_CY+(ASC.BODY>>1)+DESC.BODY >= CTL_DY)
-    warn(`card line 1 descenders reach y+${CARD_L1_CY+(ASC.BODY>>1)+DESC.BODY}, control row starts y+${CTL_DY}`);
-  if(CARD_L1_Y+CARD_L1_H < CARD_L1_CY+(ASC.BODY>>1)+DESC.BODY)
+  // Descenders on a STACKED card (the AC, and Settings) must stop before its
+  // control row, or a lowercase name clips into the chips. Font 2 descends only
+  // 7px below cy where FreeSans went 11, so this now clears by 5px rather than
+  // 1 — the assert stays because the clearance is a property of the FACE, and
+  // swapping the face is exactly when nobody re-checks it.
+  if(CARD_L1_CY+INK_BOT.BODY >= CTL_DY)
+    warn(`card line 1 descenders reach y+${CARD_L1_CY+INK_BOT.BODY}, control row starts y+${CTL_DY}`);
+  if(CARD_L1_Y+CARD_L1_H < CARD_L1_CY+INK_BOT.BODY)
     warn('card line 1 dirty rect does not cover its own descenders');
+  // The line must also not start ABOVE its own dirty rect, which the taller
+  // FreeSans could not do and a shorter face can: ink at cy-5 against a rect
+  // that starts at CARD_L1_Y would leave the tops of every name uncleared.
+  if(CARD_L1_CY+INK_TOP.BODY < CARD_L1_Y)
+    warn(`card line 1 ink starts y+${CARD_L1_CY+INK_TOP.BODY}, above its dirty rect at y+${CARD_L1_Y}`);
 
   let out=`<span class="hd">page</span> ${TAB_LABEL[page]}   `+
           `<span class="hd">body</span> ${ROWS_Y0}..${ROWS_Y0+NUM_DEVICES*ROW_H-1}\n`;
   out+=`header  glyph 0..${STATUS_ICO_W-1} | tabs ${TAB_X0}..${TAB_X0+TAB_COUNT*TAB_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
   out+=`card    x ${CARD_X}..${CARD_X+CARD_W-1}, content ${CARD_IN_X0}..${CARD_IN_X1} (${CARD_IN_W}px)\n`;
-  out+=`bulb    chips ${CARD_IN_X0}..${CARD_IN_X0+4*CHIP_PITCH-CHIP_GAP-1} | swatches ${SW_X0}..${SW_X0+2*SW_CELL_W-1}\n`;
+  out+=`bulb    id ${CARD_IN_X0}..${BULB_CTL_X0-1} (name ${BULB_NAME_W}px) | chips ${BULB_CTL_X0}..${SW_X0-1} (${BULB_CHIP_W}x${BULB_CTL_H}) | swatches ${SW_X0}..${SW_X0+2*SW_CELL_W-1}\n`;
   out+=`ac      chips ${CARD_IN_X0}..${ACS_X0-1} | stepper ${ACS_X0}..${ACS_X0+2*ACS_BTN_W+ACS_VAL_W-1}\n`;
   out+=`scenes  ${SCENE.length} in ${sceneRowsN()} rows, showing ${sceneRow}..${sceneRow+SCENE_VIS_ROWS-1} of 0..${sceneMaxRow()}\n`;
   out+=`        grid x ${SCENE_X0}..${sceneTileX(SCENE_COLS-1)+SCENE_TILE_W-1} | gutter ${SCENE_SB_X0}..${SCR_W-1} | y ${ROWS_Y0}..${sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H-1}\n`;
   out+=`night   ${ladder}\n`;
+  out+=`shift   ${shiftLadder}\n`;
   out+= warnings.length
       ? `<span class="warn">${warnings.length} issue(s):\n  ${warnings.join('\n  ')}</span>`
       : `<span class="ok">no clipping, overflow, tiling or palette issues detected</span>`;
@@ -824,7 +1048,13 @@ cv.addEventListener('click',e=>{
       }
       return;
     }
-    if(rw===SET_ROW_NIGHT) set.night=!set.night;
+    if(rw===SET_ROW_NIGHT){
+      for(let c=0;c<NIGHT_CHIPS;c++){
+        const q=nightRect(c);
+        if(px>=q.x && px<q.x+q.w){ set.nightMode=NIGHT_CHIP_MODE[c]; draw(); return; }
+      }
+      return;
+    }
     if(rw===SET_ROW_SCHED) set.nightSched=!set.nightSched;
     if(rw===SET_ROW_FLIP)  set.flip=!set.flip;
     draw(); return;
@@ -857,12 +1087,12 @@ cv.addEventListener('click',e=>{
 
 // Deep-link a state, so a particular case can be reopened (or screenshotted)
 // without clicking back to it:
-//   ?page=0|1|2  &night=1  &scenes=24  &stale=1  &ha=0  &wifi=0  &bri=4
-//   &name=Bedside+reading+lamp  &mode=heat  &avail=0  &ct=0
+//   ?page=0|1|2  &night=0|1|2  &scenes=24  &stale=1  &ha=0  &wifi=0  &bri=4
+//   &name=Bedside+reading+lamp  &mode=heat  &avail=0  &ct=0  &hum=60
 const Q=new URLSearchParams(location.search);
 if(Q.has('scenes')) sceneStress(Math.max(0,+Q.get('scenes')-SCENE_BASE.length));
 if(Q.has('page'))   page=Math.max(0,Math.min(2,+Q.get('page')));
-if(Q.has('night'))  set.night=Q.get('night')!=='0';
+if(Q.has('night'))  set.nightMode=Math.max(0,Math.min(2,+Q.get('night')));
 if(Q.has('flip'))   set.flip=Q.get('flip')!=='0';
 if(Q.has('bri'))    set.briIdx=Math.max(0,Math.min(BRI_STEPS-1,+Q.get('bri')));
 if(Q.has('stale'))  stale=Q.get('stale')!=='0';
@@ -872,6 +1102,7 @@ if(Q.has('name'))   dev[0].name=Q.get('name');
 if(Q.has('mode'))   dev[3].mode=Q.get('mode');
 if(Q.has('avail'))  dev[1].avail=Q.get('avail')!=='0';
 if(Q.has('ct'))     dev[2].ct=Q.get('ct')!=='0';
+if(Q.has('hum'))     dev[3].humidity=Q.get('hum')==='-1'?null:+Q.get('hum');
 
 draw();
 setInterval(()=>{ if(!isErr()) draw(); },20000);   // keep the clock live

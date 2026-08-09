@@ -36,7 +36,14 @@
 // climate.* goes out to the Sensibo cloud. Measured REAL changes at 1135-1643 ms
 // (a no-op write short-circuits in 24 ms, which is what misled the first tuning
 // pass into 1500 and made every genuine setpoint step report a read timeout).
-#define HTTP_READ_SVC_MS   2500
+//
+// 1500 rather than the 2500 that comment justifies: haPostService() already
+// treats a read timeout as delivered (the reconcile poll establishes truth
+// either way), so the extra 1000 ms bought only a cleaner log line at the cost
+// of a longer frozen screen. Still comfortably above the 1135-1643 ms measured
+// real-change range, so a genuine climate call still reads back clean far more
+// often than it times out.
+#define HTTP_READ_SVC_MS   1500
 
 // Circuit breaker: after a failed call, don't let further taps each pay another
 // timeout. Fail fast (flash the row red) until this window expires, then allow
@@ -135,6 +142,16 @@
 #define NIGHT_ON_MIN   (23 * 60 + 45)     // 23:45
 #define NIGHT_OFF_MIN  (8 * 60)           // 08:00
 
+// A daily restart at a quiet hour, inside the night window so it is never
+// visible: the one multi-minute heap sample taken during development drifted
+// -400 B, and hours-long soaks are unproven, so this makes slow drift a
+// non-issue for a 24/7 appliance rather than something that has to be proven
+// absent. 05:30 rather than midnight: comfortably inside NIGHT_ON_MIN..
+// NIGHT_OFF_MIN so a reboot mid-restart never straddles the night-mode edge,
+// and far from either boundary so the two scheduled events can't land on the
+// same minute.
+#define RESTART_MIN    (5 * 60 + 30)      // 05:30
+
 // ── Persistence ──────────────────────────────────────────
 // NVS namespace for the Settings page. Shares the 20 KB nvs partition with
 // WiFiManager's own credential store (a separate namespace).
@@ -157,12 +174,18 @@
 #define SP_4           16
 #define SP_6           24
 
-// CORNER RADII. Two steps and a pill, applied by role and never mixed within
-// one: containers get R_LG, controls that sit on them get R_SM, and anything
-// whose height defines its shape (the settings toggle) is a pill at h/2. The tab
-// strip used to be in that last group and no longer draws a shape at all.
-#define R_SM           6                  // chips, small controls
-#define R_LG           8                  // cards, scene tiles
+// CORNERS ARE SQUARE, EVERYWHERE. There is deliberately no radius token: cards,
+// scene tiles, chips, steppers and the settings toggle are all plain rects, so
+// every surface and every control on it share one corner treatment and nothing
+// has to decide which of two radii it belongs to. This replaced an R_SM 6 /
+// R_LG 8 / pill h/2 set — don't reintroduce one for a single component, since a
+// lone rounded control on a square page reads as a rendering bug rather than a
+// style. Two consequences worth knowing, both of which USED to need care and no
+// longer do: a partial repaint can no longer strand a corner arc (fillRoundRect
+// left the four corner pixels of its bounding box untouched, so blanking had to
+// be square on purpose), and a clear that reaches a card's edge column now
+// erases a border PIXEL rather than an arc — still wrong, still guarded by
+// starting every in-card dirty rect at CARD_IN_X0, just for a simpler reason.
 
 // ── header (y 0..31) ─────────────────────────────────────
 // 32px, up from 22. The tab targets grew 24 -> 32px with it, which matters
@@ -198,13 +221,17 @@
 // survive, while the indicator has to be inside a rect that gets cleared, or a
 // tab that stops being current would keep its bar forever.
 //
-// 2px and not 3: the label centres on STATUS_CY in F_BODY, so its descenders
-// ("Settings" has a g) reach y 26, and a 3px bar would leave them one pixel of
-// air. simulator.html asserts that clearance rather than trusting this comment.
+// 2px and not 3, though the margin is no longer what set it: the label centres
+// on STATUS_CY in F_BODY, and Font 2 descends only 7px below that centre where
+// FreeSans went 11, so "Settings"' g now reaches y 22 against a bar at y 29 —
+// 7px of air rather than the 1px that originally forced 2 over 3. It stays 2
+// because it is an underline and not a rule; simulator.html asserts the
+// clearance rather than trusting either number in this comment.
 //
-// The label budget is now the whole cell less SP_1 a side (73px) instead of the
-// pill's 65px, so nothing here is close to a fit failure any more — but TAB_W
-// stays 81, since it is fixed by the header tiling above, not by the widest word.
+// The label budget is the whole cell less SP_1 a side (73px), and the widest
+// label ("Settings") is 49px in Font 2, down from 65px in FreeSans. Nothing here
+// is remotely close to a fit failure — but TAB_W stays 81, since it is fixed by
+// the header tiling above, not by the widest word.
 #define TAB_UL_H       2
 #define TAB_UL_Y       (STATUS_DIV_Y - TAB_UL_H)     // 29..30
 #define TAB_UL_PAD     2                             // bleed each side of label
@@ -218,13 +245,16 @@
 #define ROWS_Y0        32
 #define ROW_H          52
 
-// Each band holds one CARD inset by SP_1 top and bottom, which is what produces
-// the uniform 6px gutter between cards (3 + 3) and 3px against the header and
-// the bottom edge. Grouping the row's contents into a surface — instead of
-// separating them with a hairline — is the single biggest reason the page reads
-// as calm: a card says "these things belong together" without drawing a line.
-#define CARD_DY        3
-#define CARD_H         (ROW_H - 2 * CARD_DY)         // 46
+// Each band holds one CARD inset 2px top and bottom, which is what produces
+// the uniform 4px gutter between cards (2 + 2) and 2px against the header and
+// the bottom edge. The inset used to be 3: the pixels that bought went into
+// the control row, so the drawn control is nearer the full 52px band the hit
+// test has always accepted. Grouping the row's contents into a surface —
+// instead of separating them with a hairline — is the single biggest reason
+// the page reads as calm: a card says "these things belong together" without
+// drawing a line.
+#define CARD_DY        2
+#define CARD_H         (ROW_H - 2 * CARD_DY)         // 48
 #define CARD_X         SP_2                          // 8
 #define CARD_W         (SCR_W - 2 * SP_2)            // 304 -> x 8..311
 #define CARD_PAD       SP_2                          // inner padding
@@ -235,46 +265,97 @@
 #define CARD_IN_X1     (CARD_X + CARD_W - CARD_PAD - 1)  // 303 — last content px
 #define CARD_IN_W      (CARD_W - 2 * CARD_PAD)           // 288
 
-// Card internals, as offsets from the card top. Line 1 is identity + live state,
-// line 2 is the controls: 3 pad + 14 line1 + 4 gap + 22 controls + 3 pad = 46.
-// CARD_L1_CY is 9 rather than 10 so that a lowercase name's descenders (5px
-// below the 13px ascent box an MC datum centres) stop at y+20, exactly one pixel
-// above the control row — a name is user data from secrets.h, so it cannot be
+// STACKED card internals, as offsets from the card top: line 1 is identity +
+// live state, line 2 is the controls — 1 pad + 18 line1 + 1 gap + 26 controls +
+// 2 pad = 48. This is now the AC card and the Settings brightness card only;
+// the three bulb cards went inline and use the BULB_* block below instead.
+// CARD_L1_CY is 8, which under FreeSans was the largest value that kept a
+// lowercase name's descenders out of the control row. Font 2's ink spans only
+// cy-5..cy+7, so those tails now stop at y+15 with 5px to spare — the constraint
+// that PICKED 8 has gone slack, but 8 is also what centres the shorter face in
+// the 18px line, so it stays. A name is user data from secrets.h and cannot be
 // assumed to be the all-caps it happens to be today.
-#define CARD_L1_CY     9                  // identity / state line, MC datum
-// The dirty rect for that line. It runs to y+20 — past the 13px ascent box the
-// datum centres — because it MUST cover descenders: clear only the ascent box
-// and renaming "Reading lamp" to "Lamp" leaves the g's tail on the card forever.
+#define CARD_L1_CY     8                  // identity / state line, MC datum
+// The dirty rect for that line. It runs to y+19, comfortably past the ink,
+// because it MUST cover descenders: clear only the cap box and renaming
+// "Reading lamp" to "Lamp" leaves the g's tail on the card forever. It must also
+// start at or above the ink's top row (y+3 here) — a shorter face rides higher
+// in the line, which is the failure a taller one could not have. Both bounds are
+// asserted in simulator.html.
 // It also starts at CARD_IN_X0 rather than CARD_X, which keeps every clear clear
-// of the R_LG corner arcs; filling those with the surface colour would square
-// the card's corners off one repaint at a time.
-#define CARD_L1_Y      2
-#define CARD_L1_H      19                 // y+2..y+20, ending just above CTL_DY
+// of the card's own border columns; filling x 8..15 with the background would
+// eat the left edge of the outline one repaint at a time.
+#define CARD_L1_Y      1
+#define CARD_L1_H      19                 // y+1..y+19, ending just above CTL_DY
 #define CARD_ICO_CX    (CARD_X + 15)      // 23 — status icon centre
 #define CARD_ICO_R     7                  // 14px optical icon box
 #define CARD_TXT_X     (CARD_X + 28)      // 36 — text starts clear of the icon
-#define CTL_DY         21                 // control row top
-#define CTL_H          22                 // control row height
+#define CTL_DY         20                 // control row top
+// 26px, up from 22: the card inset and pads paid for it, so the drawn control
+// is nearer the 52px row band screenHitTest() has always accepted vertically.
+#define CTL_H          26                 // control row height
 
-// CHIP GRID — 4 across a device card, 5 across the brightness card, one pitch.
-// 4*54 + 3*4 = 228 (x 16..243); 5*54 + 4*4 = 286 (x 16..301).
+// CHIP GRID — 5 across the Settings brightness card. 5*54 + 4*4 = 286 (x 16..301).
+// This USED to be shared with the device rows, so a control on either page was
+// the same size. The bulb rows went inline (below) and now carry their own
+// narrower chip, so the two pages no longer match: a bulb chip is 43x40 against
+// this one's 54x26. That is a real cost of the inline layout, not an oversight —
+// the AC row's ACM_W 60 had already made "one shared pitch" approximate.
 #define CHIP_W         54
 #define CHIP_GAP       SP_1
 #define CHIP_PITCH     (CHIP_W + CHIP_GAP)           // 58
 
-// The two colour-temperature swatches fill the rest of a bulb card's control
-// row exactly: 228 + 2*30 = 288 = CARD_IN_W + 1. Circles rather than labelled
-// buttons — the bulbs are white-spectrum, so the control IS its colour, and a
-// "2202K" caption in a 22px control was unreadable anyway. The value still
-// appears, live and authoritative, on the card's state line.
-#define SW_X0          (CARD_IN_X0 + 4 * CHIP_PITCH - CHIP_GAP)   // 244
+// ── bulb card: ONE INLINE ROW ────────────────────────────
+// [icon name] [OFF][1%][30%][100%] (o)(o)  — identity and controls on the same
+// line, so the controls get the card's full height instead of the 26px strip
+// under a state line. The AC card is unchanged and still stacks its two lines;
+// btnRect() is the only place that knows the difference.
+//
+// THE BULB CARD HAS NO STATE TEXT. With the controls spanning the full width
+// there is nowhere to put "30%  2700K", so the live reading is carried by the
+// icon (real colour temperature, blended by real brightness) plus which chip is
+// lit. See the OFFLINE note in screen.cpp for what replaced the one state string
+// that was doing safety work rather than reporting a value.
+//
+// x tiles the card EXACTLY: 44 + 4*43 + 3*4 + 2*30 = 288 = CARD_IN_W.
+// The chips are narrower than the 54 they were (the identity column is paid for
+// out of their width) and much taller: 43x40 against 54x26 is +22% of area, but
+// the HORIZONTAL tap target shrinks by 11px, and horizontal is the axis that
+// matters — screenHitTest() already accepts the full 52px row band vertically.
+// That is the trade the inline layout costs; there is no arrangement that keeps
+// a 15px icon, a name, four chips and two swatches in 288px without it.
+#define BULB_ID_W      44                 // x  16..59  — icon + name column
+#define BULB_CTL_X0    (CARD_IN_X0 + BULB_ID_W)      // 60 — first chip
+#define BULB_CHIP_W    43                 // label budget 35px; "100%" is 33
+#define BULB_CHIP_PITCH (BULB_CHIP_W + CHIP_GAP)     // 47
+// The name's budget after the icon: 20px, or two Font 2 digits with air. The
+// shipped names are single ordinals ("1", "2", "3") and this column is sized for
+// them — a longer name still renders, textTrunc() just cuts it hard. That is a
+// much tighter budget than the ~180px the old stacked line gave, and it is the
+// other thing the inline layout costs.
+#define BULB_NAME_W    (BULB_CTL_X0 - SP_1 - CARD_TXT_X)          // 20
+// Vertically the whole card less a 4px pad, which is where "bigger buttons"
+// actually comes from: 40px drawn against 26.
+#define BULB_CTL_DY    4
+#define BULB_CTL_H     (CARD_H - 2 * BULB_CTL_DY)    // 40
+
+// The two colour-temperature swatches fill the rest of the row exactly:
+// 44 + 228 + 2*30 = 288. Circles rather than labelled buttons — the bulbs are
+// white-spectrum, so the control IS its colour, and a "2202K" caption in a
+// control this size was unreadable anyway. Note the swatches did NOT move when
+// the row went inline: the identity column takes exactly what the four chips
+// gave up, so SW_X0 is still 244.
+#define SW_X0          (BULB_CTL_X0 + 4 * BULB_CHIP_PITCH - CHIP_GAP)   // 244
 #define SW_CELL_W      30                 // tap cell; the circle is smaller
-#define SW_R           11
+#define SW_R           13                 // 26px circle in the 40px row
 
 // AC card: 3 mode chips then the setpoint stepper, tiling the same 288px.
 // 3*60 + 2*4 = 188 (x 16..203), then 28 + 44 + 28 = 100 (x 204..303).
-// Mode chips are 60 not 54 because "COOL" needs 51px of the 52 a 60px chip
-// leaves — the one place a label decides a width rather than the reverse.
+// Mode chips became 60 rather than 54 because "COOL" needed 51px of the 52 a
+// 60px chip leaves — the one place a label ever decided a width. In Font 2 that
+// same word is 31px and would fit a 54px chip easily, so the original reason is
+// spent; 60 stays because these three chips and the 100px stepper tile the
+// card's 288px exactly, and that is now what fixes the number.
 #define ACM_W          60
 #define ACM_PITCH      (ACM_W + CHIP_GAP)            // 64
 #define ACS_X0         (CARD_IN_X0 + 3 * ACM_PITCH - CHIP_GAP)    // 204
@@ -282,22 +363,32 @@
 #define ACS_VAL_W      44                 // the readout between them
 
 // ── Settings page ────────────────────────────────────────
-// 4 cards on the same row grid. Row 0 is a discrete slider (5 chips); rows 1..3
-// are a list of toggles.
+// 4 cards on the same row grid. Rows 0 and 1 are discrete segmented controls
+// (5 chips, 3 chips); rows 2..3 remain toggles.
 #define SET_ROWS       4
 #define SET_ROW_BRI    0                  // 5 chips on the shared chip pitch
-#define SET_ROW_NIGHT  1                  // toggle
+#define SET_ROW_NIGHT  1                  // 3 chips: Off / Shift / Red
 #define SET_ROW_SCHED  2                  // toggle
 #define SET_ROW_FLIP   3                  // toggle
-// Title + caption stacked and vertically centred in the 46px card: content is
-// 13 + 4 + 13 = 30, so it starts 8 down and the captions' descenders land 3px
-// clear of the bottom.
+#define NIGHT_CHIPS    3     // Off / Shift / Red — see NIGHT_CHIP_MODE in state.h
+// Title + caption stacked and vertically centred in the 48px card. With Font 2's
+// 10px caps the title's ink runs y+9..21 and the caption's y+26..38, so the pair
+// is centred with a 4px gap between them and the captions' descenders land 9px
+// clear of the bottom edge (it was 4px under FreeSans). Both are the same FACE
+// now — the built-in set has no bold — so the two are told apart by colour tier
+// alone, C_TEXT against C_TEXT3.
 #define SET_TITLE_CY   14
 #define SET_CAP_CY     31
 #define TOGGLE_W       44
 #define TOGGLE_H       24
 #define TOGGLE_X       (CARD_IN_X1 - TOGGLE_W)       // 259
 #define TOGGLE_DY      ((CARD_H - TOGGLE_H) / 2)     // 11
+// The knob is a square block inset TGL_PAD on all four sides — 18x18 in the 24px
+// track — so it reads at a glance from across a dark room while the track's
+// remaining 20px of travel is what says which end it is at. 3 is the same inset
+// the disc used as its radius margin, so the control's weight is unchanged from
+// the pill it replaced; anything larger closes the gap the travel needs.
+#define TGL_PAD        3
 
 // ── Scenes page ──────────────────────────────────────────
 // A 3-column grid of 88x64 tiles, three rows visible, scrolled a page at a time

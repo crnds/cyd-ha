@@ -2,6 +2,7 @@
 //
 // Everything runs on the single Arduino loop() task — no RTOS tasks, no
 // locking. loop() calls, in order: updateNetState -> servicePoll ->
+// serviceNightSchedule -> serviceDailyRestart -> applySettings ->
 // handleTouch -> screenRender, then delay(20).
 //
 // The touch stack (xptWrite/xptRead/readTouch) is carried from the sibling
@@ -143,6 +144,8 @@ static Preferences prefs;
 
 // Four keys, all uint8_t, clamped on load. Small enough that a RowMeta table
 // (as ../btc-cyd-v2 uses for its thirteen) would cost more than it saves.
+// K_NIGHT's stored range widened from 0/1 (bool) to 0/1/2 (NightMode) — same
+// key, no migration needed: see NightMode's ordinal comment in state.h.
 #define K_BRI   "s.bri"
 #define K_NIGHT "s.nit"
 #define K_SCHED "s.nsch"
@@ -157,12 +160,13 @@ static void settingsLoad() {
   }
   uint8_t bri = prefs.getUChar(K_BRI, BRI_DEFAULT);
   S.set.briIdx     = (bri < BRI_STEPS) ? bri : BRI_DEFAULT;   // clamp corrupt
-  S.set.night      = prefs.getUChar(K_NIGHT, 0) != 0;
+  uint8_t nm = prefs.getUChar(K_NIGHT, NIGHT_OFF);
+  S.set.nightMode  = (nm < NIGHT_MODE_COUNT) ? nm : NIGHT_OFF;   // clamp corrupt
   S.set.nightSched = prefs.getUChar(K_SCHED, 1) != 0;
   S.set.flip       = prefs.getUChar(K_FLIP,  0) != 0;
-  Serial.printf("settings: bri=%u/%u (duty %u) night=%d sched=%d flip=%d\n",
+  Serial.printf("settings: bri=%u/%u (duty %u) nightMode=%d sched=%d flip=%d\n",
                 S.set.briIdx, BRI_STEPS - 1, BRI_DUTY[S.set.briIdx],
-                S.set.night, S.set.nightSched, S.set.flip);
+                S.set.nightMode, S.set.nightSched, S.set.flip);
 }
 
 // Only a user tap persists. Scheduled night transitions deliberately do not:
@@ -173,11 +177,18 @@ static void settingsSave(const char* key, uint8_t val) {
 }
 
 // Rewriting the LEDC duty every frame visibly glitches CYD backlights, so only
-// push it when it actually changes. Seeded 0xFF so the first call always
-// writes — including the boot seed, which must go through here or the memo
-// desyncs from the panel.
+// push it when it actually changes. The first call must ALWAYS write, since the
+// boot seed goes through here and screenBegin() has left the pin LOW — skip it
+// and the panel never lights at all.
+//
+// Hence the wider type: `last` must hold a value no duty can equal, and a
+// uint8_t has none. It was seeded 0xFF, which is also BRI_DUTY's 100% step, so
+// booting at 4/4 compared 255 == 255 on the very first call, returned early, and
+// left the backlight at the 0 duty ledcAttachPin() starts with — a black screen
+// with a healthy loop() behind it. The other four steps wrote fine, which is
+// what made it look like dead hardware rather than a brightness bug.
 static void applyBacklight(uint8_t duty) {
-  static uint8_t last = 0xFF;
+  static int16_t last = -1;
   if (duty == last) return;
   last = duty;
   ledcWrite(BL_CHANNEL, duty);
@@ -188,15 +199,20 @@ static void applyBacklight(uint8_t duty) {
 // in the tap handler, which is what makes a brightness change picked while
 // night mode is dimming still land the moment night ends.
 static void applySettings() {
-  screenSetNight(S.set.night);
+  screenSetNightMode(S.set.nightMode);
   screenSetFlip(S.set.flip);
-  applyBacklight(BRI_DUTY[S.set.night ? BRI_NIGHT : S.set.briIdx]);
+  applyBacklight(BRI_DUTY[S.set.nightMode == NIGHT_RED ? BRI_NIGHT : S.set.briIdx]);
 }
 
-// The schedule WRITES the Night mode toggle at its two boundaries rather than
-// overriding it. Edge-triggered, so between the boundaries a manual toggle
+// The schedule WRITES the Night mode picker at its two boundaries rather than
+// overriding it. Edge-triggered, so between the boundaries a manual pick
 // always wins and sticks — a level-triggered version would re-assert itself on
-// the next render and make the toggle physically un-turn-off-able before 08:00.
+// the next render and make the picker physically un-turn-off-able before
+// 08:00. This only ever writes NIGHT_RED/NIGHT_OFF, exactly as it wrote
+// true/false before Night Shift existed — a manually-picked NIGHT_SHIFT rides
+// through both boundary checks below untouched unless one of them actually
+// fires, at which point it loses to whichever the boundary sets. The schedule
+// never selects Shift itself.
 static void serviceNightSchedule() {
   static int16_t lastMin = -1;
 
@@ -215,20 +231,54 @@ static void serviceNightSchedule() {
   if (lastMin < 0) {
     // First valid clock reading, or the schedule was just re-enabled: adopt the
     // window. This is what makes a 02:00 reboot come up already in night mode.
-    S.set.night = (m >= NIGHT_ON_MIN || m < NIGHT_OFF_MIN);
+    S.set.nightMode = (m >= NIGHT_ON_MIN || m < NIGHT_OFF_MIN) ? NIGHT_RED : NIGHT_OFF;
     Serial.printf("night: adopting window at %02d:%02d -> %d\n",
-                  t.tm_hour, t.tm_min, S.set.night);
+                  t.tm_hour, t.tm_min, S.set.nightMode);
   } else {
     // The `lastMin < B && m > B` half catches a boundary missed because a
     // blocking HTTP call held loop() across the minute. Neither clause misfires
     // at the midnight wrap, where lastMin is 1439 and m is 0.
     if (m == NIGHT_ON_MIN  || (lastMin < NIGHT_ON_MIN  && m > NIGHT_ON_MIN)) {
-      S.set.night = true;
+      S.set.nightMode = NIGHT_RED;
       Serial.println("night: schedule on");
     } else if (m == NIGHT_OFF_MIN || (lastMin < NIGHT_OFF_MIN && m > NIGHT_OFF_MIN)) {
-      S.set.night = false;
+      S.set.nightMode = NIGHT_OFF;
       Serial.println("night: schedule off");
     }
+  }
+  lastMin = m;
+}
+
+// A daily restart at a quiet hour, so slow heap drift over a 24/7 uptime is a
+// non-issue rather than something that has to be proven absent by a soak test
+// that hasn't run long enough. Edge-triggered on the wall clock, the same
+// pattern serviceNightSchedule() uses for its two boundaries — deliberately
+// NOT the same function, because unlike night mode this has exactly one
+// boundary and nothing to adopt at boot (a fresh boot is itself a restart).
+static void serviceDailyRestart() {
+  static int16_t lastMin = -1;
+
+  struct tm t;
+  // Zero timeout, same reasoning as serviceNightSchedule(): runs every loop
+  // pass and must never block, and an unsynced clock must never be read as
+  // matching the boundary.
+  if (!getLocalTime(&t, 0)) return;
+
+  int16_t m = (int16_t)(t.tm_hour * 60 + t.tm_min);
+  if (m == lastMin) return;
+
+  // The first valid reading only adopts the clock; it must NOT restart, or a
+  // boot that happens to land inside the same minute as RESTART_MIN would
+  // trigger a second restart immediately. Every reading after that checks the
+  // edge, including the `lastMin < X && m > X` clause that catches a boundary
+  // missed because a blocking HA call held loop() across the minute — the
+  // same trap serviceNightSchedule() guards against. Neither clause misfires
+  // at the midnight wrap, where lastMin is 1439 and m is 0.
+  if (lastMin >= 0 &&
+      (m == RESTART_MIN || (lastMin < RESTART_MIN && m > RESTART_MIN))) {
+    Serial.println("restart: scheduled daily restart");
+    Serial.flush();
+    ESP.restart();
   }
   lastMin = m;
 }
@@ -468,10 +518,14 @@ static void doSetting(int16_t row, int8_t sub) {
       S.set.briIdx = (uint8_t)sub;
       settingsSave(K_BRI, S.set.briIdx);
       break;
-    case SET_ROW_NIGHT:
-      S.set.night = !S.set.night;
-      settingsSave(K_NIGHT, S.set.night);
+    case SET_ROW_NIGHT: {
+      if (sub < 0 || sub >= NIGHT_CHIPS) return;
+      const uint8_t mode = NIGHT_CHIP_MODE[sub];
+      if (S.set.nightMode == mode) return;
+      S.set.nightMode = mode;
+      settingsSave(K_NIGHT, S.set.nightMode);
       break;
+    }
     case SET_ROW_SCHED:
       S.set.nightSched = !S.set.nightSched;
       settingsSave(K_SCHED, S.set.nightSched);
@@ -497,6 +551,21 @@ static void handleTouch() {
   uint32_t pollNow = millis();
   if (pollNow - lastPoll < TOUCH_POLL_MS) return;
   lastPoll = pollNow;
+
+  // Cheaper still: skip the read entirely when idle. PENIRQ already has to
+  // read LOW for a tap to be accepted (TOUCH_REQUIRE_IRQ below), so a HIGH
+  // reading here means nothing is touching the panel and the 3-sample
+  // bit-bang inside readTouch() (~1.5 ms) has nothing to find — one
+  // digitalRead replaces it. Except every ~5 s, when a full read still runs
+  // so the "touch idle: rawZ=.." log further down keeps the noise floor
+  // visible instead of going dark the instant nothing is touching the glass.
+  // This is deliberately just a gate on whether to READ, not a substitute for
+  // the post-read IRQ check below — that one re-reads the pin after the
+  // bit-bang and is what actually decides whether a tap is accepted.
+  if (digitalRead(PIN_TOUCH_IRQ) == HIGH && pollNow - lastDbg < 5000) {
+    wasDown = false;
+    return;
+  }
 
   int16_t  x = -1, y = -1;
   uint16_t rx = 0, ry = 0, rz = 0;
@@ -856,7 +925,7 @@ void setup() {
   // brightness and day colours — the TOUCH_* block it prints is meaningless
   // otherwise, and a 1% red crosshair cannot be aimed at. Forcing the values
   // here rather than adding conditionals downstream keeps every consumer right.
-  S.set.flip = false; S.set.night = false; S.set.nightSched = false;
+  S.set.flip = false; S.set.nightMode = NIGHT_OFF; S.set.nightSched = false;
   S.set.briIdx = BRI_STEPS - 1;
 #endif
 
@@ -890,6 +959,7 @@ void loop() {
   // Before handleTouch() so a scheduled flip lands before the tap that follows
   // it is mapped. All four calls are memoised no-ops when nothing changed.
   serviceNightSchedule();
+  serviceDailyRestart();
   applySettings();
   handleTouch();
   screenRender();

@@ -30,12 +30,24 @@ enum HitKind : uint8_t { HIT_NONE = 0, HIT_TAB, HIT_ROW, HIT_SCENE, HIT_SCROLL,
 // rebuilt to handle.
 struct Hit { HitKind kind; int16_t idx; int8_t sub; };
 
+// Night mode is 3-way. RED keeps ordinal 1 to match the legacy bool's
+// "true" — a device already persisting s.nit=1 in NVS needs zero migration
+// code; SHIFT (2) is the only genuinely new value.
+enum NightMode : uint8_t { NIGHT_OFF = 0, NIGHT_RED = 1, NIGHT_SHIFT = 2,
+                           NIGHT_MODE_COUNT };
+
+// The 3-chip row's on-screen order (Off, Shift, Red) is NOT NightMode's
+// storage order, so this is the one place mapping chip position <-> mode —
+// used both by the renderer (mode -> highlighted chip) and the tap handler
+// (chip -> mode).
+static const uint8_t NIGHT_CHIP_MODE[3] = { NIGHT_OFF, NIGHT_SHIFT, NIGHT_RED };
+
 // Board-level settings, persisted to NVS (namespace NVS_NAMESPACE). These are
 // the only mutable state that outlives a reboot.
 struct Settings {
   uint8_t briIdx     = BRI_DEFAULT;  // index into BRI_DUTY_LIST
-  bool    night      = false;        // red-only UI + 1% backlight
-  bool    nightSched = true;         // schedule writes `night` at the boundaries
+  uint8_t nightMode  = NIGHT_OFF;    // NightMode: Off / Red (red-only + 1% backlight) / Shift (warm palette only)
+  bool    nightSched = true;         // schedule writes nightMode Off<->Red at the boundaries
   bool    flip       = false;        // display rotated 180
 };
 
@@ -70,6 +82,7 @@ struct DeviceState {
   float tMin     = AC_TEMP_MIN_DEF;
   float tMax     = AC_TEMP_MAX_DEF;
   float tStep    = AC_TEMP_STEP_DEF;
+  int   humidity = -1;       // current_humidity 0-100, -1 = unknown/unsupported
 
   // Set when a service call fails, so the row's state text flashes red for a
   // moment. Distinct from staleness (a failed *poll*), which dims instead.

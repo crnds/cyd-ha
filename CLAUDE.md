@@ -17,8 +17,8 @@ Scope is still deliberately fixed, just no longer to a single screen. It is now
 2. **Scenes** — macros over the three bulbs, in a scrolling 3-column grid of
    88×64 tiles. Five are defined; the page is built for far more. No new
    entities.
-3. **Settings** — 4 board-level knobs (backlight, night mode, night schedule,
-   screen flip). Nothing here touches Home Assistant.
+3. **Settings** — 4 board-level knobs (backlight, night mode [off / shift /
+   red], night schedule, screen flip). Nothing here touches Home Assistant.
 
 **The UI runs on a design system, not per-screen styling.** Colour and type
 tokens live in `src/ui/theme.h` / `src/ui/gfx.h`; all geometry (spacing scale,
@@ -138,17 +138,33 @@ flashing (`python3 -m http.server 8765`). **Keep its constants in sync with
 
 Three things about it are load-bearing, not conveniences:
 
-- **It carries the real font metrics.** `ADV_*` are the exact `xAdvance` tables
-  lifted from TFT_eSPI's `Fonts/GFXFF/` headers, and `gtext()` draws character by
-  character at those advances, so `textW()` here is byte-identical to
-  `tft.textWidth()` on the panel. That is the only reason its clipping warnings
-  can be trusted: the previous version approximated with `13px system-ui` and
-  could neither confirm nor deny a 1px overflow. If a face is ever swapped, both
-  the tables here and `ROLE_ASC`/`ROLE_DESC` in `gfx.cpp` must be re-extracted —
-  the layout in `config.h` is derived from those numbers.
-- **It re-checks every `static_assert` from `screen.cpp`**, plus two things the
-  compiler cannot see: that a card's line-1 descenders stop before the control
-  row, and that its dirty rect covers those descenders. It also asserts the night
+- **It draws the panel's ACTUAL GLYPHS, not a stand-in.** The `GLYPHS` blob holds
+  the real byte streams from `Font16.c` / `Font32rle.c` / `glcdfont.c`, and
+  `gtext()` re-implements the same three decoders `TFT_eSPI::drawChar` uses (row
+  bitmap / 8-bit RLE / 5 column bytes) at the same advances. So the simulator is
+  now WYSIWYG rather than indicative, and `textW()` is byte-identical to
+  `tft.textWidth()`.
+
+  It used to size Helvetica to match FreeSans' cap height, which was close enough
+  only because FreeSans essentially *is* Helvetica. That trick broke outright on
+  the built-in faces: Font 2's `O` advances 8px at a 10px cap height where
+  Helvetica needs ~11, so glyphs were drawn wider than their advances and visibly
+  collided — the simulator reported a layout that was not the panel's. Since a
+  bitmap font is fully determined, shipping the real pixels is the honest fix.
+
+  Regenerate with `python3 scripts/gen_sim_fonts.py` (glyph blob) and
+  `python3 scripts/font_metrics.py` (the `ADV`/`INK_*`/`BASE`/`BOXTOP` tables and
+  `gfx.cpp`'s). If a role is ever repointed at a different face, **both** scripts
+  must be re-run — the layout in `config.h` is derived from those numbers.
+- **It re-checks every `static_assert` from `screen.cpp`**, plus things the
+  compiler cannot see. On a **stacked** card: that line 1's descenders stop before
+  the control row, that its dirty rect covers those descenders, and that the line's
+  ink does not start *above* that rect — the third is new with the shorter face,
+  which rides higher in the line than a taller one could. On the **inline bulb**
+  row: that the icon and the name's ink both fit the control band they now share,
+  that the identity clear rect stops before the first chip, and that every chip
+  label still fits the narrower chip (a fit failure there is silent — `textFit()`
+  would just drop to the alt label or `F_MICRO`). It also asserts the night
   palette's red ladder is collision-free (see "Night mode").
 - **State is deep-linkable** — `?page=1&night=1&scenes=100&stale=1&ha=0&mode=heat`
   and so on, listed at the bottom of the file. That is what makes a specific case
@@ -189,6 +205,18 @@ tokens across two files looks like a wart until you remember `simulator.html`
 mirrors `config.h` and nothing else — putting sizes next to colours would give
 the layout two sources of truth, which is the failure that file exists to catch.
 
+**Every corner is square, and there is deliberately no radius token.** Cards,
+scene tiles, chips, steppers, the scroll thumb and the settings toggle are all
+plain `fillRect`/`drawRect`, so a surface and the controls on it share one corner
+treatment and nothing has to decide which step it belongs to. This replaced an
+`R_SM` 6 / `R_LG` 8 / pill-at-`h/2` set, on request — **don't reintroduce a radius
+for a single component**, since one rounded control on an otherwise square page
+reads as a rendering fault rather than as a style. The settings toggle's knob went
+from a disc to a square block for that reason: a circle sliding in a sharp-cornered
+slot was the last mark that still read as rounded, and the knob's *position*, not
+its outline, is what says on or off. Two rules elsewhere in this file used to be
+argued from corner arcs and are now argued from border pixels; both still hold.
+
 **Colour tokens are semantic, and that is what fixed the old palette.** The
 previous names described appearance (`C_MUTED`, `C_GREEN`, `C_RED`), so each ended
 up serving several unrelated roles and none could be changed without changing all
@@ -199,23 +227,52 @@ vs a stale reading), `ACCENT`, and `SUCCESS`/`WARNING`/`ERROR`.
 highlighted, nothing is — and the three status colours appear only when there is
 something to say.
 
-**Type is four roles over two faces.** The build already carried `LOAD_GFXFF`, so
-this uses TFT_eSPI's bundled proportional FreeSans instead of its bitmap fonts:
-`F_NUM` (Bold 12pt, the AC setpoint alone), `F_TITLE` (Bold 9pt, card titles and
-the clock), `F_BODY` (9pt, everything live), `F_MICRO` (GLCD 6×8, last-resort fit
-only). Hierarchy comes from **weight and text tier, not more sizes** — at 320×240
-a third size reads as a ransom note. Two consequences to know:
+**Type is four roles over TFT_eSPI's built-in BITMAP faces**, selected by number
+in `gfx.cpp`: `F_NUM` (Font 4, 26px box, the AC setpoint alone), `F_TITLE` and
+`F_BODY` (both Font 2, 16px box), `F_MICRO` (Font 1 / GLCD 6×8, last-resort fit
+only). These are drawn pixel by pixel at one fixed size, so every stem lands on
+the grid and nothing is scaled or resampled at draw time — which is the whole
+point, and why the FreeSans GFX faces this used to carry are gone.
 
-- **9pt is the floor.** GFX fonts only scale by integer `textsize`, so there is no
-  face between FreeSans 9pt and the 6×8 GLCD bitmap. That is why a settings
-  caption is the same *size* as its title and separated by weight and colour
-  instead; it is a real constraint, not an oversight.
-- **Name the faces in `gfx.cpp` and nowhere else.** `TFT_eSPI.h` pulls in
-  `gfxfont.h`, which declares all 48 bundled fonts with internal linkage in every
-  TU that sees it. So an explicit `#include <Fonts/GFXFF/...>` is a *redefinition
-  error*, and merely referencing a face from a second `.cpp` puts a second copy of
-  its glyph bitmaps in flash. Verified: the three faces appear once each
-  (`nm | grep FreeSans` → `_ZL…`), ~7.8 KB total.
+**This was a deliberate swap, on request, away from the proportional FreeSans
+build.** Do not "restore" it as a legibility fix without re-reading the trades
+below; three of them are worse than they were, and that was the accepted price.
+
+- **`F_TITLE` and `F_BODY` ARE THE SAME FACE.** The built-in set has no bold, so
+  the whole title-vs-state hierarchy now rests on **colour tier alone** (`C_TEXT`
+  vs `C_TEXT2`/`C_TEXT3`); the weight signal that used to carry half of it does
+  not exist. Do not "fix" this by promoting titles to Font 4 — at 18px caps it
+  does not fit `CARD_L1_H`, and a card title larger than the AC setpoint inverts
+  the page's one intended emphasis.
+- **Body text is smaller than it was: 10px caps against FreeSans' 13px.** That is
+  the cost of the pixel grid. It also squeezes the fallback ladder — `F_MICRO` is
+  only 3px shorter than `F_BODY` now, so a `textFit()` fallback is far less
+  visible than it used to be and correspondingly less of a warning.
+- **The ladder has a hole.** There is nothing between Font 2 (10px caps) and
+  Font 4 (18px caps), so `F_NUM` is the only step above body text and a settings
+  caption is necessarily the same size as its title. Same constraint as before,
+  different numbers.
+- **Font 2 is appreciably narrower**, which is the one thing that got easier:
+  "Settings" went 65px → 49px, `"COOL"` 51px → 31px, the clock 44px → 35px, and
+  the default 14-character device names went ~151px → ~104px. Several comments in
+  `config.h` that read "X only just fits" now describe slack; they say so.
+- **Ink is NOT centred in the box TFT_eSPI positions.** A built-in glyph sits
+  inset by blank rows, by a different amount top and bottom, and `drawString`
+  centres an M\* datum on the *full box* where it centred a free font on its
+  *ascent*. Hence `ROLE_DY` in `gfx.cpp`, and hence `fontInkTop()`/
+  `fontInkBottom()` replacing the old `fontAscent()`/`fontDescent()` — callers
+  want "where does the ink start", which the old ascent/2 arithmetic only
+  answered by accident of the free fonts being symmetric about their datum.
+- **Flash cost is a wash, not a saving.** Font 2 + Font 4 + GLCD come to 8475 B
+  against FreeSans' 6582 B + GLCD 1280 B = 7862 B, so **+613 B**. Font 4 carries a
+  full 96-character set for a role that draws digits and `--`; that is where it
+  goes. If flash ever matters, that is the thing to trim, not the face choice.
+- **`ROLE_INK_TOP` / `ROLE_INK_BOT` / `ROLE_DY` are measured, not read off the
+  font headers.** The headers give the nominal box (Font 2: 16 tall, baseline 13;
+  Font 4: 26 tall, baseline 19) but Font 2's caps start 3 rows down and Font 4's
+  1 row down, so the nominal numbers put the degree rings in the wrong place.
+  `python3 scripts/font_metrics.py` decodes the glyph data and prints all three
+  tables plus simulator.html's; re-run it if a role is ever repointed.
 
 **Every component honours the full state set** — `BV_INACTIVE / BV_ACTIVE /
 BV_ACTIVE_OFF / BV_PRESSED / BV_DISABLED / BV_ERR` — and resolves it through one `ctlColour()`
@@ -233,8 +290,9 @@ on what was selected.** Four decisions in there:
   selected — 9 night-steps and ~2.75:1 day luminance clear of `C_ELEVATED` — without
   claiming anything is happening. It is a **vis state, not a colour the caller
   passes in**, which is what keeps the invariant above in this one table.
-- **`BV_DISABLED` recedes into the card** rather than greying out on top of it.
-  There is no state to show, so the control must not look like it is showing one.
+- **`BV_DISABLED` recedes into the background** rather than greying out on top of
+  the card. There is no state to show, so the control must not look like it is
+  showing one. The Devices card carries no fill, so `C_BG` is what it sinks to.
 - **`BV_PRESSED` is a full-brightness fill**, deliberately the loudest thing the
   UI ever draws, because it has to land within `PRESS_FLASH_MS` and before HA has
   answered. It is the only such fill.
@@ -379,10 +437,12 @@ adding a scene is one line and nothing else. There is deliberately **no
   offset re-points every slot at a different scene, so not one cached `BtnVis` byte
   describes what is now meant to be there.
 - **A scroll needs no body wipe, and that is load-bearing, not luck.** Tile rects
-  are fixed, so the 10/9px gaps between them never change content — but only
-  because a slot past the end of the table is blanked with a **square**
-  `fillRect`. `fillRoundRect` leaves the four corner pixels of its bounding box
-  untouched, so a rounded clear would strand the previous tile's corners.
+  are fixed, so the 10/9px gaps between them never change content, and a slot past
+  the end of the table is blanked with the same rect the tile occupies. This used
+  to need saying: when tiles were rounded, the clear had to be a **square**
+  `fillRect` on purpose, since `fillRoundRect` leaves the four corner pixels of its
+  bounding box untouched and a rounded clear stranded the previous tile's corners.
+  Corners are square now, so the drawn shape and the clear cannot drift apart.
 - **`Hit::idx` is `int16_t` for this page.** `HIT_SCENE` carries an absolute index
   into the whole table, not the 0–11 on-screen slot, and an `int8_t` would wrap at
   128 — inside the range the grid was rebuilt to handle.
@@ -419,9 +479,10 @@ runs every loop pass, dispatches on `S.page`, and repaints only what changed:
   several times a second. **Don't put any per-second value here**; that region is
   minute-rate by design. Connection health belongs to the glyph, and staleness to
   the card dimming, not to this readout. **The clock is exactly 5 characters** —
-  "23:45" is 44px in `F_TITLE` against the 45px its region leaves, so anything
+  "23:45" is 35px in `F_TITLE` against the 45px its region leaves, so anything
   wider spills into tab 2's cell, which only repaints on a page change, making the
-  overflow permanent.
+  overflow permanent. (It was 44px of that 45px under FreeSans. The rule is
+  unchanged; it is simply no longer one pixel from failing.)
 - **The current tab is an underline, not a filled pill.** A pill spent the
   solid-accent fill — the mark that means "selected" on a chip — on the one strip
   that navigates rather than acts, so the header read as a fourth row of buttons.
@@ -445,30 +506,43 @@ runs every loop pass, dispatches on `S.page`, and repaints only what changed:
   down → 0 bars, all red. **Colour AND a shape/badge change, never colour alone**,
   because the palette collapses to red at night and "is it working" has to survive
   that. The `HA` label's diagnostic value is not lost — it is in the serial log.
-- Each **card's identity line** (icon + name + state) is **one** region compared by
-  its rendered string *and* by the icon's resolved shape and colour. The icon has
-  to be in that compare: the AC's state line does not mention its mode (the chips
+- Each **card's identity** (icon + name, plus the live state on the AC) is **one**
+  region compared by its rendered string *and* by the icon's resolved shape and
+  colour. The icon has to be in that compare, and on a bulb card it is now doing
+  nearly all of the work: the AC's state line does not mention its mode (the chips
   do), so a `cool`→`dry` change would otherwise dirty nothing and leave the wrong
-  glyph on the glass.
+  glyph on the glass — and a bulb has no state string at all, so brightness and
+  colour changes reach the screen *only* through the icon's resolved colour.
+  **A bulb clears only its identity COLUMN** (`BULB_ID_W`, x 16..59), not the card
+  width: its six controls sit on the same line and repaint on their own compares,
+  so a full-width clear would erase chips nothing is going to redraw.
 - Each **control, tab, scene tile and settings toggle** is compared by its *visual*
   state (`BtnVis`), not by underlying values — so two brightness values mapping to
   the same highlight cost nothing, and a change repaints 2 chips instead of all 6.
 
 **Every dirty rect inside a card starts at `CARD_IN_X0`, never at `CARD_X`.**
-Filling `x 8..15` would paint the `R_LG` corner arcs with the surface colour and
-square the card's corners off, one repaint at a time. Same reasoning as the
-`fillRect`-not-`fillRoundRect` rule for blanking an empty scene slot.
+Filling `x 8..15` would paint over the card's own left border column and erase the
+outline, one repaint at a time. (This used to be about the `R_LG` corner arcs;
+the corners went square, the rule did not.)
 
-**A card's line-1 dirty rect (`CARD_L1_H`) deliberately runs past the 13px ascent
-box the datum centres on**, because it must cover descenders: clear only the ascent
-box and renaming "Reading lamp" to "Lamp" leaves the g's tail on the card forever.
-`CARD_L1_CY` is 9 and not 10 for the mirror-image reason — at 10 those descenders
-reach into the control row. Device names are user data from `secrets.h`, so they
-cannot be assumed to be the all-caps they happen to be today.
+**A STACKED card's line-1 dirty rect (`CARD_L1_H`) deliberately runs past the 13px
+ascent box the datum centres on**, because it must cover descenders: clear only the
+ascent box and renaming "Reading lamp" to "Lamp" leaves the g's tail on the card
+forever. `CARD_L1_CY` is 8 and not 9 for the mirror-image reason — at 9 those
+descenders reach into the control row. Device names are user data from
+`secrets.h`, so they cannot be assumed to be the all-caps they happen to be today.
+That is the AC card and the Settings brightness card; **the three bulb cards are
+inline** and their identity shares the control band, so the constraint there is
+that the icon and the name's ink both fit inside `BULB_CTL_DY..BULB_CTL_H` —
+`simulator.html` asserts that pair, which the stacked layout never needed.
 
-**A failed service call flashes the card's BORDER, not just its text.** The whole
-surface carries the notification, and redrawing the outline alone is enough since
-the fill and its contents are unchanged.
+**The card's BORDER is its alarm channel: a failed service call flashes it, and an
+unreachable device HOLDS it.** The whole card carries the notification, and
+redrawing the outline alone is enough since nothing behind it changes. The second use is not decoration — it is what replaced the word
+`OFFLINE` on the bulb cards when their state line went away, so the fail-loud rule
+survives a layout with no room for text. It cannot misfire at boot:
+`DeviceState::avail` starts `true` and only a poll that actually saw
+`unavailable` clears it.
 
 **The device card's icon is the highest-value pixel on the page.** It is derived
 live: a bulb's real colour temperature (interpolated across the range, not
@@ -500,9 +574,15 @@ wipe is deferred to the next `screenRender()`.
 `tabVis` means "every tab inactive", while the computed value always has one
 active, so the strip would repaint on every pass. A flicker bug with no warning.
 
-GFX/GLCD fonts don't paint their own background, so each dirty region is
-`fillRect`-cleared first. The row separator sits at `top - 2`, outside every
-clear rect, so it is painted once.
+**All text is drawn transparent, so each dirty region is `fillRect`-cleared
+first.** `textAt()` uses the one-argument `setTextColor()`, which sets the
+background to the same colour and thereby selects TFT_eSPI's transparent glyph
+path for both the Font 2 bitmap and the Font 4 RLE decoder. That is not merely
+inherited from the old GFX behaviour — it is now required: with `ROLE_DY` applied,
+Font 4's 26px box is *taller* than the 26px control row it sits in and reaches the
+last screen line on the AC row, so an opaque draw would overdraw its neighbours.
+The row separator sits at `top - 2`, outside every clear rect, so it is painted
+once.
 
 **Night mode** recolours the whole UI in place, so `src/ui/theme.h`'s palette is
 **runtime values, not `#define`s** — the `C_*` names are now array slots into
@@ -538,22 +618,93 @@ across an explicit `MUST_DIFFER` list.
 `NEUTRAL`'s remaining one-step neighbours are `DISABLED` and `WARM`, and the trade
 is argued on role separation in `theme.h`: the ladder ranks *values*, and those
 three never appear as the same *kind* of mark (`NEUTRAL` is only ever a chip fill,
-`DISABLED` only ever a label on a `SURFACE` fill, `WARM` only ever a swatch disc).
+`DISABLED` only ever a label on an unfilled control, `WARM` only ever a swatch disc).
 The low half of the ladder has no free level with two clear steps below `ACCENT`.
 
 **A palette or rotation change repaints nothing by itself.** Every dirty-region
-compare is on a *value*, and neither alters one — so `screenSetNight()` and
+compare is on a *value*, and neither alters one — so `screenSetNightMode()` and
 `screenSetFlip()` must `fillScreen()` + `screenInvalidate()`. Both are memoised
 no-ops otherwise, which is why `loop()` can call them every pass.
 
-**The schedule *writes* the Night mode toggle; it does not override it.**
+**The schedule *writes* the Night mode picker; it does not override it.**
 `serviceNightSchedule()` is edge-triggered at 23:45 and 08:00, so between the
-boundaries a manual toggle always wins and sticks. A level-triggered version
-would re-assert itself on the next render and make the toggle physically
+boundaries a manual pick always wins and sticks. A level-triggered version
+would re-assert itself on the next render and make the picker physically
 un-turn-off-able before 08:00. On the first valid clock reading it *adopts* the
 window, which is what makes a 02:00 reboot come up already in night mode.
 Scheduled transitions deliberately do **not** write NVS — only user taps do,
 since boot-time adoption already restores the right state.
+
+**Night mode is 3-way — Off / Shift / Red — and the Settings row that used to
+be a toggle is now a 3-chip segmented control**, the same pattern the
+Brightness row's 5 chips already use. This was a deliberate reuse rather than
+a new row: the Settings page is fixed at exactly 4 rows that tile the body
+exactly (see below), so a 5th row was explicitly ruled out and the existing
+Night mode row absorbed the new state instead. `NightMode`
+(`include/state.h`) is `{ NIGHT_OFF = 0, NIGHT_RED = 1, NIGHT_SHIFT = 2 }` —
+**RED deliberately kept ordinal 1**, matching the legacy bool's "true", so a
+device already persisting `s.nit = 1` in NVS reads back as full Red with zero
+migration code; `NIGHT_SHIFT` (2) is the only genuinely new value. The 3
+chips' on-screen order (Off, Shift, Red) is *not* `NightMode`'s storage
+order, so `NIGHT_CHIP_MODE[]` is the one place that maps chip position to
+mode, used by both the renderer and `doSetting()`.
+
+**Shift is manual only — the schedule never selects it.**
+`serviceNightSchedule()` still writes only `NIGHT_RED`/`NIGHT_OFF` at its two
+boundaries, exactly as it wrote `true`/`false` before Shift existed. A
+manually-picked Shift rides through both boundary checks untouched — same
+"manual wins between boundaries" rule as always — and loses to whichever the
+boundary sets the moment one actually fires. There is no schedule state that
+means "engage Shift."
+
+**Shift does not touch the backlight — only Red does.** `applySettings()`
+forces `BRI_DUTY[BRI_NIGHT]` (the dimmest step) only when
+`S.set.nightMode == NIGHT_RED`; Shift leaves `briIdx` alone. This is a
+deliberate scope limit: there is no second "night brightness" concept in this
+codebase to reuse (`BRI_NIGHT` is just index 0 of the ordinary 5-step
+`BRI_DUTY_LIST`), and inventing a dedicated Shift duty was out of scope for
+what is meant to be a palette-only effect.
+
+**Shift's palette is a milder, warmer alternative to Red — green and blue
+scaled down, not zeroed.** `warmShift()` (`theme.cpp`) mirrors `redOnly()`'s
+shape but keeps green at `NIGHT_SHIFT_GREEN_PCT` and blue at
+`NIGHT_SHIFT_BLUE_PCT` of their day values, leaving red untouched —
+`THEME_LIST` gained a fourth column for it, with the same `THEME_DERIVE`
+sentinel meaning "compute from day" that the Red column uses. **Both
+constants were cut twice on real-hardware feedback, and the two rounds are
+worth telling apart because they were different KINDS of fix.** Round one
+(60/35 → 60/15, blue only): `ACCENT` specifically — the fill on selected
+chips and the tab underline — still read as a saturated blue popping out of
+an otherwise warm/amber screen, so `ACCENT` got its own cut-harder override
+(see below) and the blanket blue dropped with it. Round two (60/15 → 45/10,
+both channels): the palette as a whole still carried too much green/blue,
+not just one token, so this time the fix was tightening the blanket knob
+itself — `NIGHT_SHIFT_GREEN_PCT`/`NIGHT_SHIFT_BLUE_PCT` in `theme.cpp` — 
+rather than adding more per-token patches. **A single luminance ladder
+cannot certify this palette the way it certifies Red's**: `redOnly()`'s
+output is genuinely monochrome, so ranking by red level alone proves
+distinctness; `warmShift()`'s output has all three channels live, so two
+colours can share near-identical luminance while reading as visually
+distinct by hue (`WARM`/`COOL` are separated mainly by the red channel,
+which passes through unscaled, despite landing under 18 luminance points
+apart), or vice versa. The values were computed by a throwaway script, never
+hand-typed, and verified per pair by both luminance gap and per-channel
+delta — see the Shift ladder in `theme.h`'s comment block for the numbers
+and the pair (`DIM`/`ERROR`) that needed the most care. **`ACCENT` is the
+only token still pinned to a custom ratio rather than the blanket**: at the
+blanket rate alone it collapses toward `SUCCESS` (both read as a dim green),
+which is the same collision `redOnly()`'s own comment already documents for
+the red column — cutting the blanket further doesn't remove that need, since
+it's a hue collision, not a brightness one. `ACCENT`'s override (green 15%,
+blue 22%) lands a dark navy-teal roughly 40 luminance points clear of
+`SUCCESS`'s now-blanket dark green, with a real green/blue channel gap on
+top. Every OTHER semantic token needed no custom ratio once the blanket
+itself moved low enough — they're still pinned explicitly rather than left
+as `THEME_DERIVE`, so a future retune of the blanket constants can't
+silently drift them without a conscious recompute-and-reverify pass.
+`simulator.html`'s `checkShiftDistinct()` asserts pairwise uniqueness plus a
+per-channel delta on the same `MUST_DIFFER` pairs, rather than porting the
+Red ladder's single-axis metric.
 
 **Screen flip mirrors the tap, not the panel.** `tft.setRotation(3)` turns the
 display 180, but touch here is hand-rolled bit-bang, so `readTouch()` still
@@ -596,17 +747,29 @@ dimming still land the moment night ends. `settingsLoad()` runs before
 `screenBegin()` because `flip` decides the rotation of the one and only first
 paint, and `briIdx` the first duty.
 
+**That memo's sentinel must be a value no duty can equal, hence `int16_t last =
+-1` and not a `uint8_t`.** It was seeded `0xFF`, which is also `BRI_DUTY`'s 100%
+step: booting with 4/4 saved in NVS compared `255 == 255` on the very first call,
+returned early, and left the channel at the 0 duty `ledcAttachPin()` starts with —
+while `screenBegin()` had already driven the pin LOW. The result is a **totally
+black panel with a perfectly healthy `loop()` behind it**, which reads as dead
+hardware: the serial log showed Wi-Fi up, HA polling and touch sampling normally.
+The other four brightness steps wrote fine, so it only appeared at 100%. If the
+screen is ever black, check `ledcWrite` is actually being reached before
+suspecting the panel.
+
 Two more rendering details worth keeping:
 - `textFit()` tries the role, then a shorter form ("100" for "100%"), then
-  `F_MICRO`. FreeSans is proportional, so don't replace this with a hand-measured
-  width — it self-corrects when a label changes, which matters most for scene
-  names, since a scene added to the table later cannot be checked against a
-  measured width.
+  `F_MICRO`. The built-in faces are proportional too, so don't replace this with a
+  hand-measured width — it self-corrects when a label changes, which matters most
+  for scene names, since a scene added to the table later cannot be checked
+  against a measured width. Note the fallback is *quieter* than it was: `F_MICRO`
+  is 3px shorter than `F_BODY` now rather than 5, so it no longer announces itself.
 - Active controls use **dark text on the cyan fill**, not white. White-on-cyan
   measures ~1.9:1 contrast; dark-on-cyan is ~9:1.
 - **Chip labels are uppercase and card titles are not**, and that is a fit
   decision rather than a stylistic one: caps have no descenders, so a 13px label
-  centres cleanly in a 22px chip, where a lowercase 'y' would touch its edge.
+  centres cleanly in a 26px chip, where a lowercase 'y' would touch its edge.
   Titles and tab labels have the vertical room, so they get sentence case, which
   reads considerably calmer at this size.
 - **The splash ticks.** `screenSplashProgress()` cycles three pips under the logo
@@ -622,13 +785,13 @@ Change those `#define`s together, not the arithmetic in `screen.cpp`.
 
 **The header grew 22 → 32px and the rows paid 2px each for it.** That buys the tab
 targets a third more height in the *worst* band of the panel (below), and it buys
-the header room for a real 9pt clock. `TAB_W` is 81 because the widest tab label
-("Settings", 65px in `F_BODY`) has to fit with air around it — a 76px cell left
-68px and looked like it was bursting. The label widths decided the cell width
-here, not the reverse. (The 81 was originally sized for that label inside a
-`SP_1`-inset **pill**; the pill is gone, so the budget is now the whole cell less
-`SP_1` a side, 73px. `TAB_W` stays 81 regardless — it is fixed by the header
-tiling above.)
+the header room for a full-size clock. `TAB_W` became 81 because the widest tab
+label ("Settings") was 65px in FreeSans and had to fit with air around it — a
+76px cell left 68px and looked like it was bursting. The label widths decided the
+cell width then, not the reverse. Two things have since retired that reasoning
+without changing the number: the pill became an underline, so the budget is the
+whole cell less `SP_1` a side (73px) rather than 65px; and "Settings" is 49px in
+Font 2. `TAB_W` stays 81 because it is fixed by the header tiling above.
 
 **The tab strip is still the least accurate region of the panel.** `CAL_INSET` is
 30, so the 4-point fit *interpolates* y=30..209 and **extrapolates** y=0..31 — and
@@ -640,20 +803,27 @@ than the real target, so a tap the firmware would have taken could read as a mis
 outright, and was rejected: it costs ~36px of body, which drops the row bands to
 44px, and a 44px band cannot hold a two-line card. The header keeps the tabs.)
 
-**Each row band holds one card inset by `CARD_DY` (3px) top and bottom**, which is
-what produces the uniform 6px gutter between cards and 3px against the header and
-the bottom edge. A card is `CARD_H` 46px: `3 pad + 14 line1 + 4 gap + 22 controls
-+ 3 pad`.
+**Each row band holds one card inset by `CARD_DY` (2px) top and bottom**, which is
+what produces the uniform 4px gutter between cards and 2px against the header and
+the bottom edge.
+
+**There are two card internals, not one.** A STACKED card is `CARD_H` 48px as
+`1 pad + 18 line1 + 1 gap + 26 controls + 2 pad`, and that is now the AC card and
+the Settings brightness card only. **The three bulb cards are INLINE** —
+`4 pad + 40 controls + 4 pad`, with the icon and the name sharing that same 40px
+band as a fixed identity column on the left. Going inline is what let the controls
+grow from 26px to 40px, and it is why the bulb state line is gone: there is no
+width left for it (see "The bulb card has no state text" in `config.h`).
 
 Devices and Settings share the row grid via `rowTop(slot)` / `cardTop(slot)`;
 both take a **slot**, not a device index. **Every device row keeps SIX logical
 slots with unchanged meanings**, even though the two kinds now lay those slots out
-differently — 4 chips + 2 swatch cells for a bulb, 3 chips + a 3-cell stepper for
-the AC. `doAction()`'s switch, the press-flash sub-index and `RowSnap::btnVis` all
-key off the slot number, so **`btnRect()` is the only function that knows about the
-difference**, and the renderer, the hit test and the calibration verify screen all
-go through it. That is what stops the drawn rect and the tappable rect drifting
-apart.
+differently in **both axes** — 4 chips + 2 swatch cells across a bulb's full-height
+inline row, 3 chips + a 3-cell stepper in the AC's 26px strip. `doAction()`'s
+switch, the press-flash sub-index and `RowSnap::btnVis` all key off the slot
+number, so **`btnRect()` is the only function that knows about the difference**,
+and the renderer, the hit test and the calibration verify screen all go through it.
+That is what stops the drawn rect and the tappable rect drifting apart.
 
 Note one deliberate inversion in there: **the AC stepper's slots run backwards
 against x** — slot 5 (down) on the left, slot 3 (up) on the right — so the control
@@ -661,11 +831,19 @@ reads left-to-right as less-to-more. The slot numbers are fixed by `doAction()`,
 mapping them in `btnRect()` is what buys the natural order without touching the
 action layer.
 
-The chip pitch is shared: 4 across a device card and 5 across the Settings
-brightness card are the same `CHIP_W`/`CHIP_PITCH`, so a control on one page is the
-same size as a control on the other. The AC's mode chips are the one exception at
-`ACM_W` 60 — "COOL" needs 51px of the 52 that leaves, the single place a label
-decided a width.
+**The chip pitch is no longer shared, and that is a real cost of the inline row.**
+It used to be one `CHIP_W`/`CHIP_PITCH` across a device card (4) and the Settings
+brightness card (5), so a control on one page was the same size as a control on the
+other. There are now three widths: `BULB_CHIP_W` 43 on a bulb, `CHIP_W` 54 on the
+brightness card, `ACM_W` 60 on the AC (where "COOL" needed 51px of the 52 that
+left). Each is fixed by its own row tiling `CARD_IN_W` 288 exactly, so they cannot
+be reconciled without re-cutting a row — don't "restore" one in isolation.
+
+The bulb chip is the one target that got **smaller** in the axis that matters:
+43px against 54px horizontally, where the drawn height went 26 → 40 but the
+tappable height was always the 52px row band. `simulator.html` checks the labels
+still fit (`"100%"` is 33px of the 35px budget), but the touch cost is real and
+`pio run -e calib -t upload` is the thing to reach for if taps start missing.
 
 Scenes ignores both grids and uses its own: `SCENE_COLS` × `SCENE_TILE_W/H` on a
 `SCENE_PITCH_X` / `SCENE_PITCH_Y` pitch, with `sceneTileX()`/`sceneTileY()` taking
@@ -685,28 +863,34 @@ the scroll gutter each clear only their own rect.
 - **Never let an unreachable device read as a normal state.** HA reports
   `unavailable`/`unknown`, which naively collapses to `on == false` and renders as
   a plain `OFF` — indistinguishable from a healthy bulb that is off.
-  `DeviceState::avail` exists for this: the card shows `OFFLINE` in red, its icon
-  goes to a red outline, and every control greys out, because there is no current
-  state to highlight. **The word is `OFFLINE` and not `UNAVAILABLE`** for a
-  measured reason: at 75px against the latter's 122px it is what lets a
-  14-character device name sit beside it without being truncated, and it is the
-  plainer word besides.
-- **When the identity line does not fit, the NAME is what loses.** The state is
-  short, live, and the reason to look at the card at all, while a name is static
-  and already known to whoever installed it. `textTrunc()` drops characters and
-  appends ".."; the shipped default names fit in every state, verified in
-  `simulator.html`. The AC's exceptional-mode line drops the word "Room" for the
-  same reason — the number is unmistakably a temperature beside its degree ring.
+  `DeviceState::avail` exists for this. The treatment is now **the card's border in
+  `C_ERROR`**, a red icon outline, and every control greyed out because there is no
+  current state to highlight; on a bulb the name goes red too, being the only text
+  left on the card. The **AC** additionally shows the word: **`OFFLINE` and not
+  `UNAVAILABLE`** for a measured reason — at 75px against the latter's 122px it is
+  what lets a long device name sit beside it without being truncated, and it is the
+  plainer word besides. The bulb cards lost that word with their state line, which
+  is exactly why the border took the job.
+- **When a card's identity does not fit, the NAME is what loses.** On the AC the
+  state is short, live, and the reason to look at the card at all, while a name is
+  static and already known to whoever installed it. On a bulb there is no state
+  beside it and the budget is simply the identity column: `BULB_NAME_W` is 20px,
+  **two Font 2 characters**, which fits the shipped ordinal names (`1`/`2`/`3`) and
+  truncates anything longer hard. `textTrunc()` drops characters and appends "..",
+  and `simulator.html` warns by name whenever it fires, so this cannot happen
+  quietly (`?name=Bedside+reading+lamp`). The AC's exceptional-mode line drops the
+  word "Room" for the same reason — the number is unmistakably a temperature beside
+  its degree ring.
 - **There is no degree glyph in either font.** `U+00B0` is outside the GFX fonts'
   0x20..0x7E charset, and a trailing "C" reads as a third digit at a glance. Both
   the setpoint and the room reading draw a 2px ring instead, positioned off
   `fontAscent()` rather than off a measured pixel.
-- **Touch targets are the full 52px row band vertically**, not the 22px control
+- **Touch targets are the full 52px row band vertically**, not the drawn control
   strip. This is used in a dark bedroom; generous targets are intentional. Scene
   tiles take their full 100 × 72 pitch, so the margins and gaps fold into the
   nearest tile rather than missing; a swatch's tap cell is 30px wide while its
-  circle is 22px, because the cell is the target and the circle is the affordance;
-  and a settings toggle row is the whole row at any x — the pill is an affordance,
+  circle is 26px, because the cell is the target and the circle is the affordance;
+  and a settings toggle row is the whole row at any x — the track is an affordance,
   not the hit area. The 32px tab strip is the one exception, and it is the
   least-used control. The scene scroll gutter is 20 × 104 per arrow — thin, but
   unlike the tab strip it sits in the band the 4-point fit *interpolates*.

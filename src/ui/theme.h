@@ -41,8 +41,8 @@
 #define RGB565(r, g, b) \
   (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
 
-// One list, three derivations (slot enum, day table, night table), so a colour
-// cannot be half-added.
+// One list, four derivations (slot enum, day table, night table, shift
+// table), so a colour cannot be half-added.
 //
 // Third column is the night override. THEME_DERIVE means "compute it from the
 // day colour by luminance" (see redOnly() in theme.cpp); anything else is a
@@ -86,36 +86,81 @@
 // simulator.html asserts the ladder is collision-free, which is the only cheap
 // way to check it without standing in a dark bedroom.
 //
+// Fourth column is Night Shift — a milder alternative computed by
+// warmShift() (theme.cpp): green scaled to 45% and blue to 10% of their day
+// values, red left untouched. Both channels were cut TWICE on real-hardware
+// feedback: green+blue started at 60/35, blue alone dropped to 60/15 when
+// ACCENT still read as a saturated blue against an otherwise warm/amber
+// screen, and both channels were cut again to 45/10 when the palette still
+// read as carrying too much green/blue overall — not a single-token problem,
+// a global one, hence tightening the blanket knob itself rather than patching
+// more individual overrides. Unlike the red column, this output is NOT
+// monochrome, so a single luminance ladder cannot certify it: two colours
+// can share near-identical luminance while reading as visually distinct by
+// hue, or vice versa. Values below were computed by a throwaway script
+// (never hand-typed — see CLAUDE.md's Night mode section), and verified per
+// pair by BOTH luminance gap and per-channel delta:
+//
+//   DIM/ERROR land only 7.5 luminance apart, but 14/31 red steps and 8/63
+//   green steps apart — DIM stays a muted brown, ERROR a near-saturated red,
+//   told apart by hue rather than brightness. WARM/COOL are 14.7 apart in
+//   luminance but 11/31 red steps apart, for the same reason (red is passed
+//   through unscaled, and the two already differed there in day mode).
+//
+//   ACCENT is the only token still pinned to a custom ratio rather than the
+//   blanket 45/10: at the blanket rate alone it collapses toward SUCCESS
+//   (both read as a dim green — the fix at 60/15 was ACCENT-specific hue
+//   separation, and cutting the blanket further does not remove that need).
+//   ACCENT's override (green 15%, blue 22%) lands a dark navy-teal (lum 30,
+//   versus the day colour's lum 132) that keeps just enough blue to read as
+//   a distinct hue from SUCCESS's now-blanket dark green (lum 70) — 40
+//   luminance points clear, plus a real green/blue channel gap. Every other
+//   semantic token needed NO custom ratio once the blanket itself moved —
+//   they are still pinned explicitly (not THEME_DERIVE) so a future retune of
+//   the blanket constants cannot silently drift them without a recompute.
+//
+// All 17 Shift values are pairwise-unique RGB565 words; simulator.html's
+// checkShiftDistinct() asserts uniqueness plus a per-channel delta on the
+// same MUST_DIFFER pairs above, rather than porting the red ladder's
+// single-axis metric.
+//
 // TH_BG IS PINNED TO 0x0041 AND MUST NOT MOVE: logo_ha.h's generated palette
 // bakes that exact value as the splash mark's background, which is what lets
 // the logo blit as an opaque rectangle with no transparency handling. Change it
 // and the boot splash grows a visible 96x96 box. Regenerate the logo first.
 #define THEME_DERIVE 0xFFFF
+// Fourth column is Night Shift: a warmer, milder alternative to the red-only
+// night column above, computed by warmShift() (theme.cpp) instead of
+// redOnly() — green/blue scaled down, not zeroed. Structural darks derive
+// fine (near-black either way); every semantic token is pinned explicitly,
+// same reasoning as the night column, computed by a throwaway script rather
+// than by hand (see CLAUDE.md's Night mode section for the method and the
+// two pairs — SUCCESS/ACCENT, DIM/ERROR — that needed the most care).
 #define THEME_LIST(X)                                                          \
-  /*     slot          day                          night                   */ \
-  X(TH_BG,        RGB565(0x07, 0x09, 0x0D), THEME_DERIVE) /* ground        */  \
-  X(TH_SURFACE,   RGB565(0x16, 0x18, 0x1D), THEME_DERIVE) /* card fill     */  \
-  X(TH_ELEVATED,  RGB565(0x23, 0x27, 0x2F), THEME_DERIVE) /* control on it */  \
-  X(TH_BORDER,    RGB565(0x2F, 0x34, 0x3E), THEME_DERIVE) /* card edge     */  \
-  X(TH_DIVIDER,   RGB565(0x1C, 0x1F, 0x26), THEME_DERIVE) /* rule / track  */  \
-  X(TH_TEXT,      RGB565(0xF4, 0xF6, 0xFA), 0xC800)       /* primary       */  \
-  X(TH_TEXT2,     RGB565(0xA6, 0xB0, 0xC2), 0xA000)       /* secondary     */  \
-  X(TH_TEXT3,     RGB565(0x70, 0x7A, 0x8C), 0x8000)       /* tertiary      */  \
-  X(TH_DISABLED,  RGB565(0x44, 0x4C, 0x59), 0x6000)       /* unavailable   */  \
-  X(TH_DIM,       RGB565(0x8A, 0x94, 0xA6), 0x3800)       /* stale value   */  \
-  X(TH_ACCENT,    RGB565(0x18, 0xBC, 0xF2), THEME_DERIVE) /* selected      */  \
-  X(TH_NEUTRAL,   RGB565(0x7A, 0x82, 0x8E), 0x6800)       /* selected: off */  \
-  X(TH_SUCCESS,   RGB565(0x2F, 0xD9, 0x7C), 0x5000)       /* online        */  \
-  X(TH_WARNING,   RGB565(0xF5, 0xA5, 0x24), 0xB000)       /* degraded      */  \
-  X(TH_ERROR,     RGB565(0xFF, 0x4D, 0x6A), 0xF800)       /* failed        */  \
-  X(TH_WARM,      RGB565(0xFF, 0xB0, 0x5C), 0x7000)       /* ~2202K amber  */  \
-  X(TH_COOL,      RGB565(0xA6, 0xCD, 0xFF), 0xD800)       /* ~4000K blue   */
+  /*     slot          day                          night          shift    */ \
+  X(TH_BG,        RGB565(0x07, 0x09, 0x0D), THEME_DERIVE, THEME_DERIVE) /* ground        */ \
+  X(TH_SURFACE,   RGB565(0x16, 0x18, 0x1D), THEME_DERIVE, THEME_DERIVE) /* card fill     */ \
+  X(TH_ELEVATED,  RGB565(0x23, 0x27, 0x2F), THEME_DERIVE, THEME_DERIVE) /* control on it */ \
+  X(TH_BORDER,    RGB565(0x2F, 0x34, 0x3E), THEME_DERIVE, THEME_DERIVE) /* card edge     */ \
+  X(TH_DIVIDER,   RGB565(0x1C, 0x1F, 0x26), THEME_DERIVE, THEME_DERIVE) /* rule / track  */ \
+  X(TH_TEXT,      RGB565(0xF4, 0xF6, 0xFA), 0xC800,       0xF363)       /* primary       */ \
+  X(TH_TEXT2,     RGB565(0xA6, 0xB0, 0xC2), 0xA000,       0xA282)       /* secondary     */ \
+  X(TH_TEXT3,     RGB565(0x70, 0x7A, 0x8C), 0x8000,       0x71A1)       /* tertiary      */ \
+  X(TH_DISABLED,  RGB565(0x44, 0x4C, 0x59), 0x6000,       0x4101)       /* unavailable   */ \
+  X(TH_DIM,       RGB565(0x8A, 0x94, 0xA6), 0x3800,       0x8A02)       /* stale value   */ \
+  X(TH_ACCENT,    RGB565(0x18, 0xBC, 0xF2), THEME_DERIVE, 0x18E6)       /* selected      */ \
+  X(TH_NEUTRAL,   RGB565(0x7A, 0x82, 0x8E), 0x6800,       0x79C1)       /* selected: off */ \
+  X(TH_SUCCESS,   RGB565(0x2F, 0xD9, 0x7C), 0x5000,       0x2B01)       /* online        */ \
+  X(TH_WARNING,   RGB565(0xF5, 0xA5, 0x24), 0xB000,       0xF240)       /* degraded      */ \
+  X(TH_ERROR,     RGB565(0xFF, 0x4D, 0x6A), 0xF800,       0xF901)       /* failed        */ \
+  X(TH_WARM,      RGB565(0xFF, 0xB0, 0x5C), 0x7000,       0xFA81)       /* ~2202K amber  */ \
+  X(TH_COOL,      RGB565(0xA6, 0xCD, 0xFF), 0xD800,       0xA2E3)       /* ~4000K blue   */
 
-#define TH_ENUM_(slot, day, night) slot,
+#define TH_ENUM_(slot, day, night, shift) slot,
 enum ThemeSlot : uint8_t { THEME_LIST(TH_ENUM_) TH_COUNT };
 #undef TH_ENUM_
 
-// Live palette. Written ONLY by themeSetNight().
+// Live palette. Written ONLY by themeSetNightMode().
 extern uint16_t THEME[TH_COUNT];
 
 // Cast to an rvalue so `C_BG = x;` cannot compile by accident.
@@ -161,10 +206,14 @@ inline uint16_t lerp565(uint16_t a, uint16_t b, uint8_t t) {
 // macro expands inside a function body, so C_* is read at call time.
 inline uint16_t tint565(uint16_t c) { return lerp565(C_BG, c, 56); }
 
-// Switches the whole palette. Returns true only when it actually changed, so
-// callers can skip the repaint — it is cheap enough to call every pass.
-bool themeSetNight(bool on);
-bool themeIsNight();
+// Switches the whole palette to mode 0=off / 1=red / 2=shift, mirroring
+// state.h's NightMode — kept as a plain uint8_t rather than the enum so this
+// file stays the dependency-free leaf module the design-system table
+// describes (no include of state.h). Returns true only when it actually
+// changed, so callers can skip the repaint — it is cheap enough to call
+// every pass.
+bool themeSetNightMode(uint8_t mode);
+uint8_t themeNightMode();
 
 // Maps one arbitrary colour the way the palette is currently mapped. Only the
 // splash logo needs this: its 9-entry palette is baked hex, so without it the

@@ -1,39 +1,60 @@
 #include "gfx.h"
 #include <string.h>
 
-// No font #include here on purpose: TFT_eSPI.h -> gfxfont.h already declares all
-// 48 bundled Free Fonts in every translation unit that sees it, so including one
-// explicitly is a redefinition error, not a convenience. Their tables have
-// internal linkage and the compiler drops the ones nothing references — which is
-// exactly why the three faces below must be REFERENCED from this file alone. A
-// second .cpp that names one gets a second copy of its glyph bitmaps in flash.
+// No font #include here. The built-in faces are compiled in by the LOAD_FONT2 /
+// LOAD_FONT4 / LOAD_GLCD flags in platformio.ini and selected by NUMBER, so
+// there is nothing to include and no way to duplicate a glyph table by naming a
+// face twice — the hazard the old FreeSans mapping had to be careful about.
+// LOAD_FONT4 also implies LOAD_RLE (TFT_eSPI.h), which is what decodes Font 4.
 TFT_eSPI tft;
 
-static const GFXfont* const ROLE_FONT[F_ROLES] = {
-  &FreeSansBold12pt7b,   // F_NUM
-  &FreeSansBold9pt7b,    // F_TITLE
-  &FreeSans9pt7b,        // F_BODY
-  nullptr,               // F_MICRO -> built-in GLCD
-};
+// Role -> built-in font number. Font 1 is GLCD 6x8; 2 and 4 are the proportional
+// bitmap faces. See gfx.h for why F_TITLE and F_BODY have to share one.
+static const uint8_t ROLE_FONT[F_ROLES] = { 4, 2, 2, 1 };
 
-// Measured off the font headers rather than guessed: ascent is max(-yOffset) and
-// descent is max(height + yOffset) over the 0x20..0x7E charset, which is exactly
-// what TFT_eSPI's glyph_ab / glyph_bb compute at setFreeFont() time. The layout
-// in config.h is derived from these numbers, so if a face is ever swapped these
-// must be re-measured with scripts/, not adjusted by eye.
-static const int8_t ROLE_ASC[F_ROLES]  = { 17, 13, 13, 8 };
-static const int8_t ROLE_DESC[F_ROLES] = {  6,  5,  5, 0 };
+// MEASURED ink extents relative to the datum cy, not read off the font headers.
+// The headers give the NOMINAL box (Font 2: 16 tall, baseline 13; Font 4: 26
+// tall, baseline 19) but every glyph sits inset inside it — Font 2's caps start
+// 3 rows down, Font 4's 1 row down — so the nominal numbers put an ornament in
+// the wrong place. scripts/font_metrics.py decodes the glyph data and prints
+// these three tables; re-run it, don't nudge them by eye.
+//
+//   role     face     ink        baseline  cap height
+//   F_NUM    Font 4   cy-8..+15  cy+10     18px
+//   F_TITLE  Font 2   cy-5..+7   cy+5      10px
+//   F_BODY   Font 2   cy-5..+7   cy+5      10px
+//   F_MICRO  Font 1   cy-4..+3   cy+3       7px
+static const int8_t ROLE_INK_TOP[F_ROLES] = { -8, -5, -5, -4 };
+static const int8_t ROLE_INK_BOT[F_ROLES] = { 15,  7,  7,  3 };
+
+// Datum compensation, added to cy inside textAt(). TFT_eSPI centres a GFX free
+// font on its ASCENT but a built-in font on its FULL BOX (drawString: `cheight =
+// glyph_ab` versus `cheight = fontHeight(font)`), and that box carries blank
+// rows the ascent did not.
+//
+// F_NUM's +4 is what makes the switch invisible where it would show most: it
+// lands Font 4's digits on the exact pixels FreeSansBold12pt used, so the AC
+// setpoint and the degree ring beside it are unmoved. Uncorrected the number
+// would jump 4px up its control row.
+//
+// The Font 2 roles take 0 — TFT_eSPI's own centring is already right for them —
+// and are deliberately RE-CENTRED rather than top-aligned with the old face:
+// their cap box shrank 13px -> 10px, and holding the old top would leave every
+// line riding high in a row height budgeted for the taller font.
+static const int8_t ROLE_DY[F_ROLES] = { 4, 0, 0, 0 };
+
+static inline FontRole roleOf(FontRole r) { return r < F_ROLES ? r : F_BODY; }
 
 void fontSet(FontRole r) {
-  if (r >= F_ROLES) r = F_BODY;
-  // setTextFont(1) also clears gfxFont in a LOAD_GFXFF build, which is what
-  // makes the GLCD fallback a clean switch rather than a font left half-set.
-  if (ROLE_FONT[r]) tft.setFreeFont(ROLE_FONT[r]);
-  else              tft.setTextFont(1);
+  // setTextFont() also clears gfxFont in a LOAD_GFXFF build, so no stale free
+  // font can survive here — which matters because font 1 means GLCD only while
+  // gfxFont is null. Nothing calls setFreeFont() any more, but the build still
+  // carries LOAD_GFXFF for that null-safety and for gfxfont.h's declarations.
+  tft.setTextFont(ROLE_FONT[roleOf(r)]);
 }
 
-int16_t fontAscent(FontRole r)  { return ROLE_ASC[r  < F_ROLES ? r : F_BODY]; }
-int16_t fontDescent(FontRole r) { return ROLE_DESC[r < F_ROLES ? r : F_BODY]; }
+int16_t fontInkTop(FontRole r)    { return ROLE_INK_TOP[roleOf(r)]; }
+int16_t fontInkBottom(FontRole r) { return ROLE_INK_BOT[roleOf(r)]; }
 
 int16_t textW(FontRole r, const char* s) {
   if (!s || !*s) return 0;
@@ -45,9 +66,15 @@ void textAt(FontRole r, const char* s, int16_t x, int16_t cy, uint8_t datum,
             uint16_t fg) {
   if (!s) return;
   fontSet(r);
+  // One-argument setTextColor sets the background to the same colour, which is
+  // what selects TFT_eSPI's transparent glyph path for both the Font 2 bitmap
+  // and the Font 4 RLE decoder. Every dirty region is fillRect-cleared first, so
+  // painting a background here would only risk overdrawing a neighbour: Font 4's
+  // 26px box is taller than the 26px control row it sits in once the datum
+  // offset is applied, and on the AC row it reaches the last screen line.
   tft.setTextColor(fg);
   tft.setTextDatum(datum);
-  tft.drawString(s, x, cy);
+  tft.drawString(s, x, cy + ROLE_DY[roleOf(r)]);
 }
 
 void textFit(FontRole r, const char* s, const char* alt, int16_t cx, int16_t cy,

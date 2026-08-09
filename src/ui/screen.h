@@ -20,7 +20,8 @@ void screenInvalidate();
 // Palette / rotation switches. Both are no-ops when nothing changed, so they
 // are safe to call every loop pass. They live here because `tft` is file-static
 // in screen.cpp — main.cpp must never poke the panel directly.
-void screenSetNight(bool on);
+// mode is 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
+void screenSetNightMode(uint8_t mode);
 void screenSetFlip(bool flip);
 
 // Maps a touch point to whatever control is under it on the current page.

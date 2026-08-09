@@ -15,23 +15,24 @@ navigation model: no drill-down, no fourth page, and scrolling only on Scenes.
 │ ⠿  ( Devices )  Scenes   Settings        23:00 │
 ├────────────────────────────────────────────────┤
 │ ╭────────────────────────────────────────────╮ │
-│ │ ◐ TRADFRI BULB 1                30%  2700K │ │
-│ │ [ OFF ][ 1% ][ 30% ][ 100% ]      ◉    ○   │ │
+│ │ ◐ 1  [ OFF ][ 1% ][ 30% ][ 100% ]   ◉   ○  │ │
 │ ╰────────────────────────────────────────────╯ │
 │ ╭────────────────────────────────────────────╮ │
-│ │ ○ TRADFRI BULB 2                       Off │ │
-│ │ [ OFF ][ 1% ][ 30% ][ 100% ]      ◉    ○   │ │
+│ │ ○ 2  [ OFF ][ 1% ][ 30% ][ 100% ]   ◉   ○  │ │
 │ ╰────────────────────────────────────────────╯ │
 │ ╭────────────────────────────────────────────╮ │
-│ │ ● TRADFRI BULB 3               100%  4000K │ │
-│ │ [ OFF ][ 1% ][ 30% ][ 100% ]      ◉    ◉   │ │
+│ │ ● 3  [ OFF ][ 1% ][ 30% ][ 100% ]   ◉   ◉  │ │
 │ ╰────────────────────────────────────────────╯ │
 │ ╭────────────────────────────────────────────╮ │
-│ │ ❄ SENSIBO SKY AC                  Room 27° │ │
+│ │ ❄ AC                              Room 27° │ │
 │ │ [  OFF  ][ COOL  ][  DRY  ] [▼]  24°  [▲]  │ │
 │ ╰────────────────────────────────────────────╯ │
 └────────────────────────────────────────────────┘
 ```
+
+A bulb card is a single line — icon, number, then every control at the card's full
+height. The AC card stacks its live reading over its controls instead, because a
+room temperature is a number nothing else on the card can show.
 
 The icon at the left of each card is the fastest thing to read on the page, and it
 is derived from live state rather than being a label: a bulb is a filled glyph in
@@ -40,13 +41,15 @@ outline when off. So the icon column tells you what the room is doing before you
 read a word. The AC shows a snowflake, a droplet or a power symbol to match its
 mode.
 
-The card's right-hand value is the authoritative live reading, which matters
-because the chips are only presets — a bulb set to 47% from the phone lights no
-chip, and the state line is what stops that looking like a fault. The two circles
-are the colour-temperature ends (the bulbs are white-spectrum, so the control *is*
-its colour). The AC's setpoint sits between the two chevrons that change it, and
-the dead cell between them is deliberate: it stops a slightly-off tap from
-stepping the wrong way.
+On a bulb card that icon is the *only* readout — there is no room on the line for
+a number, and the chips are only presets, so a bulb set to 47% from the phone
+lights no chip and shows no percentage. Its colour and dimness still tell you what
+it is doing. An unreachable bulb is unmistakable a different way: the whole card
+outlines in red, icon and number with it, and every control greys out. The two
+circles are the colour-temperature ends (the bulbs are white-spectrum, so the
+control *is* its colour). The AC's setpoint sits between the two chevrons that
+change it, and the dead cell between them is deliberate: it stops a slightly-off
+tap from stepping the wrong way.
 
 **Scenes** — macros over the three bulbs (the AC is not touched), in a 3-column
 grid. Five are defined; nine fit on screen, and past that the page scrolls a page
@@ -142,7 +145,8 @@ independent axes, not one choice.
 
 The interface is built on a small design system rather than per-screen styling: 16
 semantic colour tokens and four type roles (`src/ui/theme.h`, `src/ui/gfx.h`), one
-spacing scale and two corner radii (the LAYOUT block of `include/config.h`), and a
+spacing scale and square corners throughout (the LAYOUT block of
+`include/config.h`), and a
 component library every control is built from (`src/ui/widgets.cpp`). Text is set
 in proportional FreeSans rather than the blocky bitmap fonts these panels usually
 use.

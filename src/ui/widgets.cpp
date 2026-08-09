@@ -14,25 +14,26 @@ CtlColour ctlColour(uint8_t vis) {
     // Selected, but nothing is on. Reads as selected against C_ELEVATED without
     // spending the accent on the one state that is not an accomplishment.
     case BV_ACTIVE_OFF: return { C_NEUTRAL, C_NEUTRAL, C_BG };
-    // Recedes INTO the card rather than greying out on top of it: there is no
-    // state to show, so the control should not look like it is showing one.
-    case BV_DISABLED: return { C_SURFACE,  C_SURFACE,  C_DISABLED };
-    case BV_ERR:      return { C_SURFACE,  C_ERROR,    C_ERROR };
+    // Recedes INTO the page rather than greying out on top of it: there is no
+    // state to show, so the control should not look like it is showing one. The
+    // devices card carries no fill, so the page background is what it sinks to.
+    case BV_DISABLED: return { C_BG,       C_BG,       C_DISABLED };
+    case BV_ERR:      return { C_BG,       C_ERROR,    C_ERROR };
     default:          return { C_ELEVATED, C_ELEVATED, C_TEXT2 };
   }
 }
 
 void wCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t fill,
            uint16_t edge) {
-  tft.fillRoundRect(x, y, w, h, R_LG, fill);
-  if (edge != fill) tft.drawRoundRect(x, y, w, h, R_LG, edge);
+  tft.fillRect(x, y, w, h, fill);
+  if (edge != fill) tft.drawRect(x, y, w, h, edge);
 }
 
 void wChip(int16_t x, int16_t y, int16_t w, int16_t h, const char* label,
            const char* alt, uint8_t vis) {
   const CtlColour c = ctlColour(vis);
-  tft.fillRoundRect(x, y, w, h, R_SM, c.fill);
-  if (c.edge != c.fill) tft.drawRoundRect(x, y, w, h, R_SM, c.edge);
+  tft.fillRect(x, y, w, h, c.fill);
+  if (c.edge != c.fill) tft.drawRect(x, y, w, h, c.edge);
   // SP_1 of padding each side — the label budget, not the chip width, is what
   // decides whether a caption fits.
   textFit(F_BODY, label, alt, x + w / 2, y + h / 2, w - 2 * SP_1, c.fg);
@@ -40,8 +41,8 @@ void wChip(int16_t x, int16_t y, int16_t w, int16_t h, const char* label,
 
 void wStepBtn(int16_t x, int16_t y, int16_t w, int16_t h, bool up, uint8_t vis) {
   const CtlColour c = ctlColour(vis == BV_ACTIVE ? BV_INACTIVE : vis);
-  tft.fillRoundRect(x, y, w, h, R_SM, c.fill);
-  if (c.edge != c.fill) tft.drawRoundRect(x, y, w, h, R_SM, c.edge);
+  tft.fillRect(x, y, w, h, c.fill);
+  if (c.edge != c.fill) tft.drawRect(x, y, w, h, c.edge);
   icoChevron(x + w / 2, y + h / 2, up, c.fg, 6, 4);
 }
 
@@ -70,13 +71,17 @@ void wSwatch(int16_t cx, int16_t cy, int16_t r, uint16_t colour, uint8_t vis) {
 }
 
 void wToggle(int16_t x, int16_t y, int16_t w, int16_t h, bool on) {
-  const int16_t r = h / 2;
+  // A square track with a square knob. The knob went from a disc to a block with
+  // the corners: a circle sliding in a sharp-cornered slot is the one shape on
+  // the panel that would still read as rounded, and the position of the knob —
+  // not its outline — is what says on or off.
+  const int16_t k = h - 2 * TGL_PAD;                 // knob side
   if (on) {
-    tft.fillRoundRect(x, y, w, h, r, C_ACCENT);
-    tft.fillCircle(x + w - r, y + r, r - 3, C_BG);
+    tft.fillRect(x, y, w, h, C_ACCENT);
+    tft.fillRect(x + w - TGL_PAD - k, y + TGL_PAD, k, k, C_BG);
   } else {
-    tft.fillRoundRect(x, y, w, h, r, C_ELEVATED);
-    tft.fillCircle(x + r, y + r, r - 3, C_TEXT3);
+    tft.fillRect(x, y, w, h, C_ELEVATED);
+    tft.fillRect(x + TGL_PAD, y + TGL_PAD, k, k, C_TEXT3);
   }
 }
 
@@ -84,9 +89,12 @@ void wValue(int16_t x, int16_t y, int16_t w, int16_t h, const char* val,
             bool degree, uint16_t fg, uint16_t bg) {
   tft.fillRect(x, y, w, h, bg);
 
-  // Neither built-in nor FreeSans covers U+00B0, and a "C" beside the number
-  // reads as a third digit at a glance. A 2px ring is both unambiguous and the
-  // one glyph in the UI that no font could supply.
+  // Font 4 has no U+00B0 (its 0x60 is a grave accent), and a "C" beside the
+  // number reads as a third digit at a glance. A 2px ring is unambiguous and
+  // costs nothing. Note Font 2 DOES carry a degree at 0x60 — TFT_ESPI_
+  // GRAVE_IS_DEGREE is set in Font16.c — but the setpoint is F_NUM, and drawing
+  // the room reading's degree from a glyph while this one stays a ring would put
+  // two different degree marks on the same page.
   const int16_t vw   = textW(F_NUM, val);
   const int16_t degW = degree ? 9 : 0;          // 7px ring + SP_1/2 of air
   const int16_t cy   = y + h / 2;
@@ -95,10 +103,11 @@ void wValue(int16_t x, int16_t y, int16_t w, int16_t h, const char* val,
   textAt(F_NUM, val, bx, cy, ML_DATUM, fg);
 
   if (degree) {
-    // TFT_eSPI centres a free font on its ASCENT, so with an M* datum the digit
-    // tops sit at cy - fontAscent/2 and the ring rides them rather than the
-    // baseline. Positioned off the metric, not off a measured pixel.
-    const int16_t ry = cy - fontAscent(F_NUM) / 2 + 3;
+    // The ring rides the DIGIT TOPS, not the baseline, so it reads as part of
+    // the number. fontInkTop() is where those tops are; positioning off the
+    // metric rather than a measured pixel is what survived the move from
+    // FreeSans to Font 4 with no change here beyond the metric's name.
+    const int16_t ry = cy + fontInkTop(F_NUM) + 3;
     const int16_t rx = bx + vw + 5;
     tft.drawCircle(rx, ry, 3, fg);
     tft.drawCircle(rx, ry, 2, fg);

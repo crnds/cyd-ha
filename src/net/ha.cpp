@@ -92,13 +92,17 @@ static inline bool inRange(float v, float lo, float hi) {
   "{{ states('%s') }},{{ state_attr('%s','brightness')|int(0) }},"    \
   "{{ state_attr('%s','color_temp_kelvin')|int(0) }};"
 
+// current_humidity defaults to -1 (not 0) so a sensor that genuinely has no
+// humidity reading is distinguishable from one reporting 0% — the range check
+// below only accepts 0..100, so a missing attribute just keeps the last value.
 #define TPL_CLIMATE                                                             \
   "{{ states('%s') }}"                                                          \
   ",{{ (state_attr('%s','temperature')|float(0)*10)|round(0)|int }}"            \
   ",{{ (state_attr('%s','current_temperature')|float(0)*10)|round(0)|int }}"    \
   ",{{ (state_attr('%s','min_temp')|float(0)*10)|round(0)|int }}"               \
   ",{{ (state_attr('%s','max_temp')|float(0)*10)|round(0)|int }}"               \
-  ",{{ (state_attr('%s','target_temp_step')|float(1)*10)|round(0)|int }}"
+  ",{{ (state_attr('%s','target_temp_step')|float(1)*10)|round(0)|int }}"       \
+  ",{{ state_attr('%s','current_humidity')|int(-1) }}"
 
 // Applies one "state,brightness,kelvin" group to a light.
 static void applyLight(DeviceState& d, const char* st, int bri, int kelvin) {
@@ -119,7 +123,7 @@ bool haPollAll() {
                    ENT_BULB1, ENT_BULB1, ENT_BULB1,
                    ENT_BULB2, ENT_BULB2, ENT_BULB2,
                    ENT_BULB3, ENT_BULB3, ENT_BULB3,
-                   ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC);
+                   ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC, ENT_AC);
   if (n <= 0 || n >= (int)sizeof(body)) {
     Serial.printf("ha: template body overflow (%d)\n", n);
     markResult(false);
@@ -137,12 +141,29 @@ bool haPollAll() {
     markResult(false);
     return false;
   }
-  String resp = http.getString();   // ~50 bytes
-  http.end();
-
-  // "off,0,0;off,0,0;on,76,2202;cool,290,237,180,310,10"
+  // "off,0,0;off,0,0;on,76,2202;cool,290,237,180,310,10,55"
   char buf[192];
-  snprintf(buf, sizeof(buf), "%s", resp.c_str());
+
+  // Read straight off the stream into the fixed buffer — no String allocation.
+  // useHTTP10(true) (see haBegin) keeps the response unchunked specifically so
+  // Content-Length is always present and getSize() is trustworthy; that is what
+  // makes a bounded readBytes() safe instead of blocking for the rest of
+  // HTTP_READ_MS waiting for bytes that were never coming.
+  int len = http.getSize();
+  if (len <= 0 || (size_t)len >= sizeof(buf)) {
+    Serial.printf("ha: template response size implausible (%d)\n", len);
+    http.end();
+    markResult(false);
+    return false;
+  }
+  size_t got = http.getStreamPtr()->readBytes(buf, (size_t)len);
+  http.end();
+  buf[got] = '\0';
+  if (got != (size_t)len) {
+    Serial.printf("ha: template short read (%u of %d)\n", (unsigned)got, len);
+    markResult(false);
+    return false;
+  }
 
   // Log only on change: silent in steady state, but every externally-made
   // change (phone app, automation) shows up with a timestamp — which is how
@@ -164,8 +185,8 @@ bool haPollAll() {
     bool thisOk  = false;
 
     if (d.kind == DEV_CLIMATE) {
-      int tg = 0, rm = 0, mn = 0, mx = 0, sp = 0;
-      if (sscanf(tok, "%19[^,],%d,%d,%d,%d,%d", st, &tg, &rm, &mn, &mx, &sp) == 6) {
+      int tg = 0, rm = 0, mn = 0, mx = 0, sp = 0, hum = -1;
+      if (sscanf(tok, "%19[^,],%d,%d,%d,%d,%d,%d", st, &tg, &rm, &mn, &mx, &sp, &hum) == 7) {
         d.avail = !isUnavail(st);
         strncpy(d.mode, st, sizeof(d.mode) - 1);
         d.mode[sizeof(d.mode) - 1] = '\0';
@@ -194,6 +215,10 @@ bool haPollAll() {
                         "(keeping %.1f/%.1f)\n", fmn, fmx, d.tMin, d.tMax);
         }
         if (inRange(fsp, 0.1f, 5.0f)) d.tStep = fsp;
+        // -1 is the template's own "attribute missing" sentinel (see
+        // TPL_CLIMATE), distinct from a genuine 0%, so it is rejected the same
+        // way an out-of-range value is: keep the last known reading.
+        if (hum >= 0 && hum <= 100) d.humidity = hum;
 
         thisOk = true;
       }
@@ -215,8 +240,12 @@ bool haPollAll() {
   }
 
   if (idx != NUM_DEVICES || !okAll) {
+    // buf itself is unusable here: strtok_r() has punched '\0's into it at
+    // every ';', so printing it now would only show the first token. `prev`
+    // was set to the pre-tokenized string above (unconditionally equal to
+    // buf, whether or not this pass logged a change), so it is what to print.
     Serial.printf("ha: template parse failed (%d/%d fields): %s\n",
-                  idx, NUM_DEVICES, resp.c_str());
+                  idx, NUM_DEVICES, prev);
     markResult(false);
     return false;
   }

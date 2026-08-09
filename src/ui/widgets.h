@@ -52,8 +52,8 @@ CtlColour ctlColour(uint8_t vis);
 void wCard(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t fill,
            uint16_t edge);
 
-// The workhorse control: a labelled rounded chip. `alt` is a shorter rendering
-// tried before the font is dropped (see textFit).
+// The workhorse control: a labelled chip. `alt` is a shorter rendering tried
+// before the font is dropped (see textFit).
 void wChip(int16_t x, int16_t y, int16_t w, int16_t h, const char* label,
            const char* alt, uint8_t vis);
 
@@ -66,8 +66,9 @@ void wStepBtn(int16_t x, int16_t y, int16_t w, int16_t h, bool up, uint8_t vis);
 // halo — a luminance change, not a hue change, so it survives night mode.
 void wSwatch(int16_t cx, int16_t cy, int16_t r, uint16_t colour, uint8_t vis);
 
-// A settings toggle. Gets no press flash: the flip IS the feedback, and it is
-// immediate because nothing here touches the network.
+// A settings toggle: a square knob at one end of a square track. Gets no press
+// flash — the flip IS the feedback, and it is immediate because nothing here
+// touches the network.
 void wToggle(int16_t x, int16_t y, int16_t w, int16_t h, bool on);
 
 // A large numeric readout, optionally with a degree ring. NOT a button and not a
