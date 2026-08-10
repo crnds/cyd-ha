@@ -368,6 +368,10 @@ static void doAction(int16_t devIdx, int8_t btn) {
       // tap there as a miss, so this is belt and braces.
       case AC_BTN_TUP:
       case AC_BTN_TDN: {
+        // Mirrors the chevrons' greyed-out BV_DISABLED state on screen: with
+        // the AC off there is no active setpoint to step, so a tap here is
+        // ignored the same way a swatch tap is on a bulb with !supportsCT.
+        if (strcmp(d.mode, "off") == 0) return;
         // The steps are relative, so they cannot act until a real setpoint is
         // known — the same rule that makes the readout show "--" until then.
         if (!d.known || isnan(d.target)) {

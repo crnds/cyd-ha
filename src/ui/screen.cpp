@@ -220,6 +220,7 @@ struct RowSnap {
   char     tempStr[8];          // AC row only: last rendered setpoint
   bool     stale;
   bool     err;
+  bool     acOff;                // AC row only: mode == "off", greys the setpoint
   bool     alarm;               // err OR offline — what the card's border shows
   // The status icon's RESOLVED appearance, not the values behind it. A bulb's
   // icon is its real colour temperature blended by its real brightness, so
@@ -621,6 +622,9 @@ static void drawDeviceCard(uint8_t dev, bool force) {
   const bool    first = force || !sn.valid;
   const int16_t top   = cardTop(dev);
   const bool    ac    = (d.kind == DEV_CLIMATE);
+  // "off" for the AC is a mode string, not DeviceState::on (that field is
+  // light-only) — mirrors the check btnActive() already uses for chip 0.
+  const bool    acOff = ac && strcmp(d.mode, "off") == 0;
 
   // The card's OUTLINE is its alarm channel. A failed service call has always
   // flashed it; an unreachable device now HOLDS it, which is what replaced the
@@ -700,7 +704,9 @@ static void drawDeviceCard(uint8_t dev, bool force) {
     if (ac && b == AC_BTN_TEMP) continue;
 
     const bool isSwatch = (d.kind == DEV_LIGHT && b >= 4);
-    const bool disabled = !d.avail || (isSwatch && !d.supportsCT);
+    const bool isAcTemp = ac && (b == AC_BTN_TUP || b == AC_BTN_TDN);
+    const bool disabled = !d.avail || (isSwatch && !d.supportsCT) ||
+                          (isAcTemp && acOff);
 
     uint8_t vis = BV_INACTIVE;
     if (disabled)                 vis = BV_DISABLED;
@@ -740,20 +746,28 @@ static void drawDeviceCard(uint8_t dev, bool force) {
   }
 
   // ── region 3 (AC only): the setpoint, between the two chevrons ──
-  // Compared on stale/err as well as the string, because the readout follows the
-  // same colour rules as the state line and neither of those changes the text.
+  // Compared on stale/err/acOff as well as the string, because the readout
+  // follows the same colour rules as the state line and none of those change
+  // the text.
   if (ac) {
     char tv[8];
     tempText(d, tv, sizeof(tv));
-    if (first || stale != sn.stale || err != sn.err || strcmp(tv, sn.tempStr) != 0) {
+    if (first || stale != sn.stale || err != sn.err || acOff != sn.acOff ||
+        strcmp(tv, sn.tempStr) != 0) {
       int16_t x, y, w, h;
       btnRect(dev, AC_BTN_TEMP, x, y, w, h);
       const bool known = (tv[0] != '-');
+      // Greyed the same as a disabled chevron beside it (C_DISABLED) when the
+      // AC is off — the setpoint can't be stepped, so it shouldn't read as
+      // live text.
       wValue(x, y, w, h, tv, known,
-             err || !d.avail ? C_ERROR : (stale ? C_DIM : C_TEXT), C_BG);
+             err || !d.avail ? C_ERROR
+                              : (acOff ? C_DISABLED : (stale ? C_DIM : C_TEXT)),
+             C_BG);
       snprintf(sn.tempStr, sizeof(sn.tempStr), "%s", tv);
     }
   }
+  sn.acOff = acOff;
 
   // Hoisted out of region 1 so regions 2 and 3 can compare against the same
   // previous values: updating them up there would make every setpoint repaint
