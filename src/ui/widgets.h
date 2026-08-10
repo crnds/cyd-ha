@@ -67,7 +67,12 @@ void wChip(int16_t x, int16_t y, int16_t w, int16_t h, const char* label,
            const char* alt, uint8_t vis);
 
 // One end of a stepper. No BV_ACTIVE case on purpose — a step is momentary, so
-// it is never "the current state".
+// it is never "the current state". The chevron's colour is a second, scoped
+// exception to ctlColour() (joining wSwatch() below): up is C_ERROR, down is
+// C_DOWN, on request, REGARDLESS of vis — except BV_PRESSED and BV_DISABLED,
+// which still take their fg from ctlColour() so the flash and the recede read
+// like every other control's. See the definition in widgets.cpp and C_DOWN's
+// comment in theme.h.
 void wStepBtn(int16_t x, int16_t y, int16_t w, int16_t h, bool up, uint8_t vis);
 
 // A colour-temperature swatch: the control IS its value, so it carries no

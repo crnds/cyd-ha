@@ -60,11 +60,11 @@
 //
 // The overrides are ordered by 5-bit red level so nothing confusable sits
 // adjacent. Structural darks are left to derive (they are near-black either
-// way); every semantic colour is pinned. Measured ladder, all 18 distinct:
+// way); every semantic colour is pinned. Measured ladder, all 19 distinct:
 //
 //   BG 0 < SURFACE 2 < DIVIDER 3 < ELEVATED 4 < BORDER 6 < DIM 7 < SUCCESS 10
 //   < DISABLED 12 < NEUTRAL 13 < WARM 14 < TEXT3 16 < ACCENT 18 < TEXT2 20
-//   < WARNING 22 < BRI 24 < TEXT 25 < COOL 27 < ERROR 31
+//   < WARNING 22 < BRI 24 < TEXT 25 < COOL 27 < DOWN 29 < ERROR 31
 //
 // The SURFACE/DIVIDER/ELEVATED trio sits one step apart, and that is the
 // intended result rather than a crowding failure: night mode exists to emit as
@@ -72,7 +72,8 @@
 // collapse toward black and the page is carried by text and ACCENT alone. What
 // must not collapse is any pair a reader has to TELL APART — and every such pair
 // (DIM/ERROR, SUCCESS/ACCENT, WARM/COOL, NEUTRAL/ELEVATED, NEUTRAL/ACCENT, BRI/
-// NEUTRAL, BRI/ACCENT, BRI/WARM, BRI/COOL, the text tiers) is ≥2 steps clear.
+// NEUTRAL, BRI/ACCENT, BRI/WARM, BRI/COOL, DOWN/ERROR, DOWN/COOL, DOWN/ACCENT,
+// the text tiers) is ≥2 steps clear.
 //
 // NEUTRAL's one-step neighbours are DISABLED and WARM, and BRI's is TEXT
 // (24 vs 25) — none of those three are a pair: the ladder ranks values, not
@@ -122,7 +123,7 @@
 //   they are still pinned explicitly (not THEME_DERIVE) so a future retune of
 //   the blanket constants cannot silently drift them without a recompute.
 //
-// All 17 Shift values are pairwise-unique RGB565 words; simulator.html's
+// All 18 Shift values are pairwise-unique RGB565 words; simulator.html's
 // checkShiftDistinct() asserts uniqueness plus a per-channel delta on the
 // same MUST_DIFFER pairs above, rather than porting the red ladder's
 // single-axis metric.
@@ -158,7 +159,8 @@
   X(TH_ERROR,     RGB565(0xFF, 0x4D, 0x6A), 0xF800,       0xF901)       /* failed        */ \
   X(TH_WARM,      RGB565(0xFF, 0xB0, 0x5C), 0x7000,       0xFA81)       /* ~2202K amber  */ \
   X(TH_COOL,      RGB565(0xA6, 0xCD, 0xFF), 0xD800,       0xA2E3)       /* ~4000K blue   */ \
-  X(TH_BRI,       RGB565(0xFF, 0xD1, 0x00), THEME_DERIVE, 0xFC40)       /* bulb % active */
+  X(TH_BRI,       RGB565(0xFF, 0xD1, 0x00), THEME_DERIVE, 0xFC40)       /* bulb % active */ \
+  X(TH_DOWN,      RGB565(0x29, 0x79, 0xFF), 0xE800,       THEME_DERIVE) /* AC step: down */
 
 #define TH_ENUM_(slot, day, night, shift) slot,
 enum ThemeSlot : uint8_t { THEME_LIST(TH_ENUM_) TH_COUNT };
@@ -204,6 +206,24 @@ extern uint16_t THEME[TH_COUNT];
 // (31,34,0) vs WARM's (31,20,1), ~32 luminance points and 14 green steps
 // clear) rather than derived.
 #define C_BRI      ((uint16_t)THEME[TH_BRI])
+
+// A vivid blue, on request, for the AC setpoint's DOWN chevron — the up
+// chevron pairs it with C_ERROR (see wStepBtn(), widgets.cpp), reused as-is
+// rather than given a token of its own, since red already existed and needed
+// no new derivation. Blue had no equally vivid existing token: C_COOL is
+// deliberately pale (it has to read as "this bulb is ~4000K", not just "this
+// is blue"), and C_ACCENT is reserved for "selected" — this chevron is drawn
+// this colour at REST, not when selected, so reusing ACCENT there would say
+// the wrong thing regardless of hue. Needed its own pinned night(red)
+// override rather than THEME_DERIVE: the day colour's derived luminance
+// lands exactly on WARM's red-level (14), an exact collision simulator.html's
+// checkNightLadder() catches globally, not just against WARM specifically.
+// Pinned to red-level 29 instead — clear of COOL (27) and ERROR (31), the
+// two things it can appear beside — using the same "step<<11" construction
+// ERROR/WARM/COOL's own overrides use. THEME_DERIVE is safe for Shift: the
+// day colour's R5 (5) is far from ERROR's pinned shift R5 (31), WARM's (31)
+// and COOL's (20), so no collision needed working around there.
+#define C_DOWN     ((uint16_t)THEME[TH_DOWN])
 
 // per-channel blend a -> b, t = 0..255. RGB565 has no alpha, so every "tinted"
 // or "translucent" fill in this UI is a precomputed blend against what is

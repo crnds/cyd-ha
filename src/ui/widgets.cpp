@@ -46,7 +46,19 @@ void wStepBtn(int16_t x, int16_t y, int16_t w, int16_t h, bool up, uint8_t vis) 
   const CtlColour c = ctlColour(vis == BV_ACTIVE ? BV_INACTIVE : vis);
   tft.fillRect(x, y, w, h, c.fill);
   if (c.edge != c.fill) tft.drawRect(x, y, w, h, c.edge);
-  icoChevron(x + w / 2, y + h / 2, up, c.fg, 6, 4);
+  // Up is C_ERROR (red, reused as-is), down is C_DOWN (a vivid blue with its
+  // own theme token — see theme.h's comment on it for why C_COOL couldn't be
+  // reused the way C_ERROR was: it is deliberately pale, matching a bulb's
+  // ~4000K appearance, which reads as muted rather than "popping" here).
+  // Only at REST, though: BV_PRESSED and BV_DISABLED still take their colour
+  // from ctlColour() above, so the press flash and the disabled recede read
+  // exactly the way every other control's do — a disabled chevron staying
+  // red or blue would read as "still selected" on a card that is trying to
+  // say the opposite.
+  const uint16_t chevFg = (vis == BV_PRESSED || vis == BV_DISABLED)
+                               ? c.fg
+                               : (up ? C_ERROR : C_DOWN);
+  icoChevron(x + w / 2, y + h / 2, up, chevFg, 6, 4);
 }
 
 void wSwatch(int16_t cx, int16_t cy, int16_t r, uint16_t colour, uint8_t vis) {

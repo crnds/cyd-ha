@@ -304,17 +304,19 @@ static inline int16_t sceneTileY(uint8_t slot) {
 // drawn rect and the tappable rect cannot drift apart.
 //
 // Bulb:  (i) 1 [OFF][1%][30%][100%] (o)(o)     slots 0..3 chips, 4..5 swatches
-// AC:    (i) AC [OFF][COOL][DRY]  [v] 30 [^]    slots 0..2 chips, 5/4/3 stepper
+// AC:    (i) AC [OFF][COOL][DRY]  [^] 30 [v]    slots 0..2 chips, 3/4/5 stepper
 //
 // The two kinds share one Y band now (BULB_CTL_DY/BULB_CTL_H) — the AC's
 // control row used to sit in its own shorter CTL_DY/CTL_H strip under a
 // separate state line, visibly out of step with the bulb rows around it; that
 // distinction is gone along with the AC's stacked layout (see drawDeviceCard).
 //
-// Note the AC stepper's slot order is REVERSED against x: slot 5 (down) is on
-// the left and slot 3 (up) on the right, so the control reads left-to-right as
-// less-to-more. The slot numbers themselves are fixed by doAction(), so mapping
-// them here is what buys the natural order without touching the action layer.
+// Slot order here is UP-left/DOWN-right, on request — up is slot 3 (left),
+// down is slot 5 (right). This used to be the other way round, deliberately,
+// to read left-to-right as less-to-more; that reasoning is retired along with
+// the layout. The slot numbers themselves are fixed by doAction(), so mapping
+// them here is what buys whichever order is wanted without touching the
+// action layer.
 static void btnRect(uint8_t dev, uint8_t b,
                     int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
   y = cardTop(dev) + BULB_CTL_DY;
@@ -323,7 +325,7 @@ static void btnRect(uint8_t dev, uint8_t b,
   if (S.dev[dev].kind == DEV_CLIMATE) {
     if (b < 3) { x = BULB_CTL_X0 + b * ACM_PITCH; w = ACM_W; return; }
     switch (b) {
-      case AC_BTN_TDN:  x = ACS_X0;                            w = ACS_BTN_W; return;
+      case AC_BTN_TUP:  x = ACS_X0;                            w = ACS_BTN_W; return;
       case AC_BTN_TEMP: x = ACS_X0 + ACS_BTN_W;                w = ACS_VAL_W; return;
       default:          x = ACS_X0 + ACS_BTN_W + ACS_VAL_W;    w = ACS_BTN_W; return;
     }

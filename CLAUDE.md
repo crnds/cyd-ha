@@ -323,6 +323,30 @@ text, and only WHICH fill depends on what was selected.** Five decisions in ther
   UI ever draws, because it has to land within `PRESS_FLASH_MS` and before HA has
   answered. It is the only such fill.
 
+**`wStepBtn()`'s chevron colour is a second exception to the ctlColour() table,
+alongside `wSwatch()`.** The AC setpoint's up/down chevrons are `C_ERROR`
+(red) and `C_DOWN` (a vivid blue) respectively, on request, regardless of
+`vis` — a direction identity, not a selection state, so it does not fit the
+"one table, resolved by `BtnVis`" rule the rest of this section describes.
+Up reuses `C_ERROR` as-is; down needed a genuinely new token, `C_DOWN` — the
+obvious reuse candidate, `C_COOL`, is deliberately pale (it has to read as
+"this bulb is ~4000K", not just "this is blue"), which read as muted rather
+than the "pop" that was asked for, and `C_ACCENT` was ruled out on role
+grounds (it means "selected"; this chevron is this colour at rest, so
+reusing it would say the wrong thing regardless of hue). `C_DOWN` needed its
+own pinned night(red) override, the same way `C_BRI`'s did: the day colour's
+derived luminance landed exactly on `WARM`'s red-level, an exact collision
+`simulator.html`'s `checkNightLadder()` catches globally rather than only
+against the pair it was checked for — pinned to red-level 29 instead, clear
+of `COOL` (27) and `ERROR` (31), the two things it can appear beside. Night
+Shift needed no override: `C_DOWN`'s day red channel is already far from
+`ERROR`'s, `WARM`'s and `COOL`'s pinned Shift red channels, so `THEME_DERIVE`
+collides with nothing there. `BV_PRESSED` and `BV_DISABLED` are carved back
+out of the override on both chevrons — both still take their colour from
+`ctlColour()`, so the press flash and the disabled recede read exactly like
+every other control's; a disabled chevron staying red or blue would read as
+"still selected" on a card that is trying to say the opposite.
+
 **New `BtnVis` values go on the END of the enum.** The raw ordinal is what every
 page's snapshot stores and compares against next frame's, so inserting in the middle
 silently changes what "unchanged" means.
@@ -668,15 +692,23 @@ destroys the fail-soft rule below. `C_SUCCESS`/`C_ACCENT` collide too,
 `C_WARM`/`C_COOL` land 2 of 31 steps apart, and the four text tiers derive into a
 15..21 huddle that destroys the hierarchy they exist to express. Hence the third
 column of `THEME_LIST`: structural darks derive, every semantic colour is pinned,
-and the measured 17-step ladder is
+and the measured 19-step ladder is
 
 ```
 BG 0 < SURFACE 2 < DIVIDER 3 < ELEVATED 4 < BORDER 6 < DIM 7 < SUCCESS 10
      < DISABLED 12 < NEUTRAL 13 < WARM 14 < TEXT3 16 < ACCENT 18 < TEXT2 20
-     < WARNING 22 < TEXT 25 < COOL 27 < ERROR 31
+     < WARNING 22 < BRI 24 < TEXT 25 < COOL 27 < DOWN 29 < ERROR 31
 ```
 
-All 17 are distinct. The `SURFACE`/`DIVIDER`/`ELEVATED` trio sits one step apart,
+`BRI` (the bulb brightness chip's yellow) and `DOWN` (the AC stepper's blue
+down chevron) are the two newest entries — later, scoped exceptions to
+"`ACCENT` is the only saturated colour", added on request for one control
+each. Both needed their own pinned night(red) level rather than deriving:
+`BRI`'s day luminance would otherwise collide with nothing directly, but its
+Shift value collapses onto `WARM`'s amber (see `C_BRI`'s comment); `DOWN`'s
+derived night(red) level lands exactly on `WARM`'s (14), a real collision
+`simulator.html` catches, so it is pinned to 29 instead. All 19 are distinct.
+The `SURFACE`/`DIVIDER`/`ELEVATED` trio sits one step apart,
 and that is the intended result rather than crowding: night mode exists to emit as
 little light as possible, so the card, its rules and the controls on it all
 collapse toward black and the page is carried by text and `ACCENT` alone. What must
@@ -928,11 +960,12 @@ is the only function that knows about the (now X-only) difference**, and the
 renderer, the hit test and the calibration verify screen all go through it.
 That is what stops the drawn rect and the tappable rect drifting apart.
 
-Note one deliberate inversion in there: **the AC stepper's slots run backwards
-against x** — slot 5 (down) on the left, slot 3 (up) on the right — so the control
-reads left-to-right as less-to-more. The slot numbers are fixed by `doAction()`, so
-mapping them in `btnRect()` is what buys the natural order without touching the
-action layer.
+**The AC stepper reads up-left, down-right** — slot 3 (up) on the left, slot 5
+(down) on the right — on request. This used to be the other way round,
+deliberately, so the control read left-to-right as less-to-more; that
+reasoning is retired along with the layout, not overlooked. The slot numbers
+are fixed by `doAction()`, so mapping them in `btnRect()` is what buys
+whichever order is wanted without touching the action layer.
 
 **The chip pitch is no longer shared, and that is a real cost of the inline row.**
 It used to be one `CHIP_W`/`CHIP_PITCH` across a device card (4) and the Settings
