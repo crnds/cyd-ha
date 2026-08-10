@@ -157,15 +157,22 @@ Three things about it are load-bearing, not conveniences:
   `gfx.cpp`'s). If a role is ever repointed at a different face, **both** scripts
   must be re-run — the layout in `config.h` is derived from those numbers.
 - **It re-checks every `static_assert` from `screen.cpp`**, plus things the
-  compiler cannot see. On a **stacked** card: that line 1's descenders stop before
-  the control row, that its dirty rect covers those descenders, and that the line's
-  ink does not start *above* that rect — the third is new with the shorter face,
-  which rides higher in the line than a taller one could. On the **inline bulb**
-  row: that the icon and the name's ink both fit the control band they now share,
-  that the identity clear rect stops before the first chip, and that every chip
-  label still fits the narrower chip (a fit failure there is silent — `textFit()`
-  would just drop to the alt label or `F_MICRO`). It also asserts the night
-  palette's red ladder is collision-free (see "Night mode").
+  compiler cannot see. On the **stacked Settings brightness card**: that line
+  1's descenders stop before the control row, that its dirty rect covers those
+  descenders, and that the line's ink does not start *above* that rect — the
+  third is new with the shorter face, which rides higher in the line than a
+  taller one could. On an **inline device row** (every device card now,
+  bulbs and the AC alike, both drawing a single centred name line): that the
+  icon and the name's ink both fit the control band they share, that the
+  identity clear rect stops before the first chip, and that every chip label
+  still fits its chip (a fit failure there is silent — `textFit()` would just
+  drop to the alt label or `F_MICRO`). On the **header's room-reading region**
+  (the AC's live temperature/humidity, relocated there from its card — see
+  `STATUS_ROOM_W`): that the worst *realistic* string (`"27"` + ring +
+  `"99%"` + `"/"` — not `"100%"`, which an indoor bedroom sensor doesn't
+  read) still fits the region's reserved budget, the same kind of check the
+  AC's identity column needed before the reading moved. It also asserts the
+  night palette's red ladder is collision-free (see "Night mode").
 - **State is deep-linkable** — `?page=1&night=1&scenes=100&stale=1&ha=0&mode=heat`
   and so on, listed at the bottom of the file. That is what makes a specific case
   reproducible, and it is how the design was reviewed:
@@ -225,7 +232,16 @@ of them. Now: `SURFACE`/`ELEVATED` (a card, then a control on it),
 vs a stale reading), `ACCENT`, and `SUCCESS`/`WARNING`/`ERROR`.
 **`ACCENT` is the only saturated colour in a resting UI** — if everything is
 highlighted, nothing is — and the three status colours appear only when there is
-something to say.
+something to say. **`BRI` is the one deliberate exception**, on request: a
+bulb card's `1%`/`30%`/`100%` chip turns yellow rather than cyan when selected,
+scoped to exactly that control — the AC's mode chips, tabs, Settings chips,
+the night-mode picker and a swatch's accent halo all stay on `ACCENT`. A
+second saturated colour loose across the whole UI would undo the rule above;
+confined to one control on one card kind, it doesn't. See `BV_ACTIVE_BRI`
+below and `theme.h`'s `C_BRI` comment for why it needed its own night-mode
+derivation rather than reusing `redOnly()`/`warmShift()` untouched — a plain
+yellow collapses onto `WARM`'s amber under Night Shift's blanket scaling, so
+`C_BRI`'s shift value is a hand-picked, green-boosted override instead.
 
 **Type is four roles over TFT_eSPI's built-in BITMAP faces**, selected by number
 in `gfx.cpp`: `F_NUM` (Font 4, 26px box, the AC setpoint alone), `F_TITLE` and
@@ -275,11 +291,11 @@ below; three of them are worse than they were, and that was the accepted price.
   tables plus simulator.html's; re-run it if a role is ever repointed.
 
 **Every component honours the full state set** — `BV_INACTIVE / BV_ACTIVE /
-BV_ACTIVE_OFF / BV_PRESSED / BV_DISABLED / BV_ERR` — and resolves it through one `ctlColour()`
-table rather than branching locally, so a pressed chip and a pressed chevron
-cannot come out looking like different interactions. The table's shape is the rule:
-**every selected state is a solid fill with dark text, and only WHICH fill depends
-on what was selected.** Four decisions in there:
+BV_ACTIVE_OFF / BV_PRESSED / BV_DISABLED / BV_ERR / BV_ACTIVE_BRI` — and resolves
+it through one `ctlColour()` table rather than branching locally, so a pressed
+chip and a pressed chevron cannot come out looking like different interactions.
+The table's shape is the rule: **every selected state is a solid fill with dark
+text, and only WHICH fill depends on what was selected.** Five decisions in there:
 
 - **An inactive control has no border** (`edge == fill`). The old page outlined all
   23 controls at once; deleting those outlines, not changing any colour, is what
@@ -290,6 +306,16 @@ on what was selected.** Four decisions in there:
   selected — 9 night-steps and ~2.75:1 day luminance clear of `C_ELEVATED` — without
   claiming anything is happening. It is a **vis state, not a colour the caller
   passes in**, which is what keeps the invariant above in this one table.
+- **`BV_ACTIVE_BRI` exists because a bulb's brightness chip was asked to turn
+  yellow, and only that chip.** `screen.cpp`'s region-2 loop is what does the
+  scoping — `!ac && !isSwatch` picks it out from the same `btnActive()` branch
+  that assigns `BV_ACTIVE`/`BV_ACTIVE_OFF` to every other chip and swatch — so
+  the AC's `COOL`/`DRY` chips and a colour-temp swatch's halo are unaffected
+  even though they share the exact same code path up to that point. Kept as
+  its own vis rather than a colour parameter for the same reason
+  `BV_ACTIVE_OFF` is: the "every selected state is a solid fill with dark
+  text" invariant lives in `ctlColour()` alone, and a caller-supplied colour
+  would let some future control quietly break it.
 - **`BV_DISABLED` recedes into the background** rather than greying out on top of
   the card. There is no state to show, so the control must not look like it is
   showing one. The Devices card carries no fill, so `C_BG` is what it sinks to.
@@ -470,52 +496,88 @@ adding a scene is one line and nothing else. There is deliberately **no
 
 **Rendering** (`src/ui/screen.cpp`) is **dirty-region based**. `screenRender()`
 runs every loop pass, dispatches on `S.page`, and repaints only what changed:
-- The **header** is three independent regions (connectivity glyph / tabs / clock)
-  that **tile it exactly** — `static_assert`ed, because a gap leaves pixels
-  nothing ever clears and an overlap is just as bad, since each region only clears
-  its own rect. The clock repaints once a minute, which is invisible. It replaced a
+- The **header** is four independent regions (connectivity glyph / tabs / room
+  reading / clock) that **tile it exactly** — the tiling is enforced by
+  construction (`TAB_STRIP_W` is *derived* from the other three, so there is
+  nothing left for a `static_assert` to catch), because a gap leaves pixels
+  nothing ever clears and an overlap is just as bad, since each region only
+  clears its own rect. The room-reading region is the newest of the four — the
+  AC's live temperature and humidity, moved here from its own card on request
+  (see `STATUS_ROOM_W` in `config.h` and `drawStatusRoom()`) so the reading is
+  visible on every page, not just Devices. It repaints on its own compare
+  (room string, humidity string, resolved colour), independently of the tabs
+  and the clock, the same "compare by rendered appearance" rule every other
+  region already follows. Its temperature and humidity are `F_TITLE`, not
+  `F_MICRO` — bumped a size on request to match the clock they sit beside,
+  which is what this region cost `TAB_GAP` to afford (18px → 12px, still on
+  the `SP_*` scale at `SP_3`). The `/` separator stayed `F_MICRO`: it is
+  punctuation, not data, so it stays quiet between two same-size numbers
+  rather than becoming a third one. Its humidity budget is 2 digits
+  (`"99%"`), not 3 (`"100%"`) — an indoor, air-conditioned bedroom sensor
+  doesn't read 100% relative humidity, so padding for that ceiling was the
+  same realistic-vs-possible error the temperature side (2 digits, not
+  `ha.cpp`'s full -10..60C sanity band) already knew to avoid, corrected here
+  on request. That correction, not a further cut to `TAB_GAP`, is what
+  finally let the gap before the clock shrink to nothing: `drawStatusRoom()`
+  adds no gap of its own after the `/`, so the whole trailing gap is just
+  however much of `STATUS_ROOM_W` the content doesn't spend, and the freed
+  pixels from the humidity fix are what let that reach zero.
+
+  The clock repaints once a minute, which is invisible. It replaced a
   freshness readout that counted seconds since `haOkMs` — and since every poll
   resets that timestamp, the number oscillated `0↔1` and repainted the full bar
   several times a second. **Don't put any per-second value here**; that region is
   minute-rate by design. Connection health belongs to the glyph, and staleness to
   the card dimming, not to this readout. **The clock is exactly 5 characters** —
-  "23:45" is 35px in `F_TITLE` against the 45px its region leaves, so anything
-  wider spills into tab 2's cell, which only repaints on a page change, making the
-  overflow permanent. (It was 44px of that 45px under FreeSans. The rule is
-  unchanged; it is simply no longer one pixel from failing.)
+  "23:45" is 35px in `F_TITLE` against the 41px this region now leaves (it was
+  51px, ~10px of it unused slack, before the room reading moved in beside it),
+  so anything wider spills into the room region, which only repaints on its own
+  compare, making the overflow permanent. There is now a 6px right margin and
+  **zero px of left slack** — tighter than the ~10px it had, and tighter than
+  the "1px from failing" FreeSans-era version ever needed to be, because the
+  room region's own budget is what absorbed the header's shrinking margin
+  instead.
 - **The current tab is an underline, not a filled pill.** A pill spent the
   solid-accent fill — the mark that means "selected" on a chip — on the one strip
   that navigates rather than acts, so the header read as a fourth row of buttons.
-  `wTab()` now draws the label plus a 2px `C_ACCENT` bar under the selected one,
-  and selection carries **two** signals (`C_TEXT` vs `C_TEXT3` *and* the bar), so
-  it survives the night palette the same way the connectivity glyph does. Three
-  things about it are load-bearing: the bar is flush with the **bottom of the rect
-  `drawTab()` passes**, which is the cell's clear rect, so it lands on the last row
-  above the 1px rule and the two read as one line — one row lower and it would
-  overwrite a rule that is painted once and never restored, one row higher and a
-  gap opens. It must stay **inside** that clear rect or a tab that stops being
-  current keeps its bar forever. And it spans the **word, not the cell** (measured
-  with `textW`, so a renamed tab needs no constant changed): at 81px against a
-  46–65px label, a full-width bar is a box around the label, which is the button
-  again. `TAB_UL_H` is 2 and not 3 because "Settings" descends to y 26 and the bar
-  starts at 29; `simulator.html` asserts that clearance, the seating identity, and
-  that every label still fits its cell.
+  `wTab()` now draws the label plus a 2px `C_ACCENT` bar seated on the selected
+  one, and selection carries **two** signals (`C_TEXT` vs `C_TEXT3` *and* the
+  bar), so it survives the night palette the same way the connectivity glyph
+  does. Three things about it are load-bearing: the bar is flush with the **TOP
+  of the rect `drawTab()` passes**, which is the cell's clear rect, so it lands
+  on the first row below the 1px rule and the two read as one line — one row
+  higher and it would overwrite a rule that is painted once and never restored,
+  one row lower and a gap opens. (The header now sits at the bottom of the
+  screen, so the rule is at the TOP of the band, not the bottom, and the bar
+  flipped to match — it now reads as an "overline" sitting just above each
+  label rather than below it.) It must stay **inside** that clear rect or a tab
+  that stops being current keeps its bar forever. And it spans the **word, not
+  the cell** (measured with `textW`, so a renamed tab needs no constant
+  changed): at 81px against a 46–65px label, a full-width bar is a box around
+  the label, which is the button again. `TAB_UL_H` is 2 and not 3 because
+  "Settings"' ink starts well clear of the bar even at this tight a margin;
+  `simulator.html` asserts that clearance, the seating identity, and that every
+  label still fits its cell.
 - **The connectivity glyph replaced two labelled dots reading "WIFI" and "HA"** —
   permanent debug chrome spending 88px to tell a healthy system it was healthy.
   Now: both up → 3 bars in `C_TEXT3`; HA down → 3 bars plus an amber badge; Wi-Fi
   down → 0 bars, all red. **Colour AND a shape/badge change, never colour alone**,
   because the palette collapses to red at night and "is it working" has to survive
   that. The `HA` label's diagnostic value is not lost — it is in the serial log.
-- Each **card's identity** (icon + name, plus the live state on the AC) is **one**
-  region compared by its rendered string *and* by the icon's resolved shape and
-  colour. The icon has to be in that compare, and on a bulb card it is now doing
-  nearly all of the work: the AC's state line does not mention its mode (the chips
-  do), so a `cool`→`dry` change would otherwise dirty nothing and leave the wrong
-  glyph on the glass — and a bulb has no state string at all, so brightness and
-  colour changes reach the screen *only* through the icon's resolved colour.
-  **A bulb clears only its identity COLUMN** (`BULB_ID_W`, x 16..59), not the card
-  width: its six controls sit on the same line and repaint on their own compares,
-  so a full-width clear would erase chips nothing is going to redraw.
+- Each **card's identity** (icon + name) is **one** region compared by its
+  rendered string *and* by the icon's resolved shape and colour. The icon has
+  to be in that compare, and on every card it is doing real work no string
+  duplicates: nothing textual on the card mentions the AC's *mode* (the chips
+  do — the room reading, now in the header, only ever shows a temperature and
+  a humidity), so a `cool`→`dry` change would otherwise dirty nothing and
+  leave the wrong glyph on the glass; a bulb has no mode string at all, so
+  brightness and colour changes reach the screen *only* through the icon's
+  resolved colour.
+  **Every device card clears only its identity COLUMN** (`BULB_ID_W`, x
+  16..59), not the card width — this used to be a bulb-only optimisation but
+  now applies to the AC too, since it shares the same inline layout: the six
+  controls beside it sit on the same row and repaint on their own compares, so
+  a full-width clear would erase chips nothing is going to redraw.
 - Each **control, tab, scene tile and settings toggle** is compared by its *visual*
   state (`BtnVis`), not by underlying values — so two brightness values mapping to
   the same highlight cost nothing, and a change repaints 2 chips instead of all 6.
@@ -531,16 +593,25 @@ ascent box and renaming "Reading lamp" to "Lamp" leaves the g's tail on the card
 forever. `CARD_L1_CY` is 8 and not 9 for the mirror-image reason — at 9 those
 descenders reach into the control row. Device names are user data from
 `secrets.h`, so they cannot be assumed to be the all-caps they happen to be today.
-That is the AC card and the Settings brightness card; **the three bulb cards are
-inline** and their identity shares the control band, so the constraint there is
+That is the **Settings brightness card only** now; **every device card is
+inline** — the AC joined the three bulbs on request, so its buttons sit at the
+same height and position theirs do rather than in a shorter strip under a
+state line — and identity shares the control band, so the constraint there is
 that the icon and the name's ink both fit inside `BULB_CTL_DY..BULB_CTL_H` —
-`simulator.html` asserts that pair, which the stacked layout never needed.
+`simulator.html` asserts that pair, which the stacked layout never needed. The
+AC's identity column briefly stacked a room temperature and humidity line
+under its name too, in place of the right-aligned state string a stacked AC
+card used to draw beside a 26px control strip — that reading has since moved
+again, to the header (`STATUS_ROOM_W`), so the AC's identity column is back to
+the bulb's plain single line — see "Two card internals" below for the
+geometry history.
 
 **The card's BORDER is its alarm channel: a failed service call flashes it, and an
 unreachable device HOLDS it.** The whole card carries the notification, and
 redrawing the outline alone is enough since nothing behind it changes. The second use is not decoration — it is what replaced the word
-`OFFLINE` on the bulb cards when their state line went away, so the fail-loud rule
-survives a layout with no room for text. It cannot misfire at boot:
+`OFFLINE`, first on the bulb cards when their state line went away and later on
+the AC too once it joined them inline, so the fail-loud rule survives a layout
+with no room for text on either kind. It cannot misfire at boot:
 `DeviceState::avail` starts `true` and only a poll that actually saw
 `unavailable` clears it.
 
@@ -779,50 +850,82 @@ Two more rendering details worth keeping:
   `screen.h`.
 
 **Layout** lives entirely in the LAYOUT block of `include/config.h`. Rows are
-`ROWS_Y0 + i*ROW_H`; **32 + 4 × 52 = 240 exactly**, and the header tiles as
-**26 + 3 × 81 + 51 = 320 exactly**. Both are `static_assert`ed in `screen.cpp`.
-Change those `#define`s together, not the arithmetic in `screen.cpp`.
+`ROWS_Y0 + i*ROW_H`; **0 + 4 × 52 = 208 exactly = `STATUS_Y0`**, and the header
+tiles as **26 + 3 × 81 + 51 = 320 exactly** in x. Both are `static_assert`ed in
+`screen.cpp`. Change those `#define`s together, not the arithmetic in
+`screen.cpp`.
 
-**The header grew 22 → 32px and the rows paid 2px each for it.** That buys the tab
-targets a third more height in the *worst* band of the panel (below), and it buys
-the header room for a full-size clock. `TAB_W` became 81 because the widest tab
-label ("Settings") was 65px in FreeSans and had to fit with air around it — a
-76px cell left 68px and looked like it was bursting. The label widths decided the
-cell width then, not the reverse. Two things have since retired that reasoning
-without changing the number: the pill became an underline, so the budget is the
-whole cell less `SP_1` a side (73px) rather than 65px; and "Settings" is 49px in
-Font 2. `TAB_W` stays 81 because it is fixed by the header tiling above.
+**The header is anchored to the BOTTOM edge (y 208..239), not the top — moved
+there on request, not discovered there.** `STATUS_Y0` (`SCR_H - STATUS_H`) is
+the top edge of the band and where the divider now sits; the body occupies
+`ROWS_Y0..STATUS_Y0-1` (0..207) instead of `STATUS_H..SCR_H-1`. The header's
+own internal layout is mirrored top-to-bottom around its own centre rather than
+just translated: the divider sits at the TOP of the band (the seam with the
+body above it, not the bottom), and the tab underline seats on it from below
+(`TAB_UL_Y == STATUS_DIV_Y + 1`) rather than from above — see `wTab()` in
+`widgets.cpp`, which flipped which edge of its rect the bar hugs. No other
+constant changed: `STATUS_H` is still 32, `TAB_W` is still 81, the three
+header regions still tile the bar exactly in x.
 
-**The tab strip is still the least accurate region of the panel.** `CAL_INSET` is
-30, so the 4-point fit *interpolates* y=30..209 and **extrapolates** y=0..31 — and
-resistive panels are worst near the bezel. `screenCalibVerifyScreen()` draws the
-tab **cells** for exactly this reason; a verify pass that skipped them would never
-reveal a miss there. It outlines the full `TAB_W × TAB_TAP_H` cell, which is what
-`screenHitTest()` accepts — it used to outline the old pill, which was *smaller*
-than the real target, so a tap the firmware would have taken could read as a miss. (Moving navigation to a bottom bar would fix the accuracy
-outright, and was rejected: it costs ~36px of body, which drops the row bands to
-44px, and a 44px band cannot hold a two-line card. The header keeps the tabs.)
+**The header grew 22 → 32px and the rows paid 2px each for it — before it ever
+moved.** That buys the tab targets a third more height in the *worst* band of
+the panel (below), and it buys the header room for a full-size clock. `TAB_W`
+became 81 because the widest tab label ("Settings") was 65px in FreeSans and
+had to fit with air around it — a 76px cell left 68px and looked like it was
+bursting. The label widths decided the cell width then, not the reverse. Two
+things have since retired that reasoning without changing the number: the pill
+became an underline, so the budget is the whole cell less `SP_1` a side (73px)
+rather than 65px; and "Settings" is 49px in Font 2. `TAB_W` stays 81 because it
+is fixed by the header tiling above.
+
+**The tab strip is still the least accurate region of the panel — now at the
+bottom bezel instead of the top one.** `CAL_INSET` is 30, applied to *every*
+corner of the 4-point fit, so it interpolates y=30..209 and **extrapolates**
+y=0..29 **and** y=210..239 symmetrically — resistive panels are worst near
+*any* bezel, not specifically the top one, which is what makes relocating the
+header a wash for accuracy rather than a regression: it needed no recalibration
+and no target resize. `screenCalibVerifyScreen()` draws the tab **cells** at
+their new position (`STATUS_Y0`, not y=0) for the same reason it always did — a
+verify pass that skipped them would never reveal a miss there. It outlines the
+full `TAB_W × TAB_TAP_H` cell, which is what `screenHitTest()` accepts — it
+used to outline the old pill, which was *smaller* than the real target, so a
+tap the firmware would have taken could read as a miss. (A previously-rejected
+alternative was **adding** a *second*, separate bottom bar while keeping this
+one at the top: that would have cost ~36px of *additional* body, dropping the
+row bands to 44px, which cannot hold a two-line card. Relocating the existing
+32px header costs nothing in body space, which is a different trade and is why
+this move was accepted where that one wasn't.)
 
 **Each row band holds one card inset by `CARD_DY` (2px) top and bottom**, which is
 what produces the uniform 4px gutter between cards and 2px against the header and
 the bottom edge.
 
-**There are two card internals, not one.** A STACKED card is `CARD_H` 48px as
-`1 pad + 18 line1 + 1 gap + 26 controls + 2 pad`, and that is now the AC card and
-the Settings brightness card only. **The three bulb cards are INLINE** —
-`4 pad + 40 controls + 4 pad`, with the icon and the name sharing that same 40px
-band as a fixed identity column on the left. Going inline is what let the controls
-grow from 26px to 40px, and it is why the bulb state line is gone: there is no
-width left for it (see "The bulb card has no state text" in `config.h`).
+**There are two card internals, not one — but only ONE is a device card now.**
+A STACKED card is `CARD_H` 48px as `1 pad + 18 line1 + 1 gap + 26 controls +
+2 pad`, and that is the Settings brightness card only. **Every device card is
+INLINE** — bulbs and the AC alike — `4 pad + 40 controls + 4 pad`, with the icon
+and identity text sharing that same 40px band as a fixed column on the left.
+The AC joined the bulbs here on request: it used to be the other STACKED card,
+with its controls in their own 26px strip under a right-aligned state string,
+visibly out of step with the bulb rows above and below it. Going inline is what
+let bulb controls grow from 26px to 40px, and it is why the bulb card's state
+line is gone (see "The bulb card has no state text" in `config.h`) — the AC
+paid the same price for the same reason, moving its room reading off that state
+line. It first landed as two extra lines stacked under the AC's name
+(`AC_ID_TEMP_CY`/`AC_ID_HUM_CY`), then moved again — on request — to the header
+(`STATUS_ROOM_W`), so it reads on every page rather than only Devices; the
+AC's identity column is back to a bulb's plain single line as a result.
 
 Devices and Settings share the row grid via `rowTop(slot)` / `cardTop(slot)`;
 both take a **slot**, not a device index. **Every device row keeps SIX logical
-slots with unchanged meanings**, even though the two kinds now lay those slots out
-differently in **both axes** — 4 chips + 2 swatch cells across a bulb's full-height
-inline row, 3 chips + a 3-cell stepper in the AC's 26px strip. `doAction()`'s
-switch, the press-flash sub-index and `RowSnap::btnVis` all key off the slot
-number, so **`btnRect()` is the only function that knows about the difference**,
-and the renderer, the hit test and the calibration verify screen all go through it.
+slots with unchanged meanings**, even though the two kinds now lay those slots
+out differently **in X only** — 4 chips + 2 swatch cells across a bulb's row, 3
+chips + a 3-cell stepper across the AC's, both starting at `BULB_CTL_X0` and
+sharing the same `BULB_CTL_DY..BULB_CTL_H` band vertically (they used to differ
+in Y too, before the AC went inline). `doAction()`'s switch, the press-flash
+sub-index and `RowSnap::btnVis` all key off the slot number, so **`btnRect()`
+is the only function that knows about the (now X-only) difference**, and the
+renderer, the hit test and the calibration verify screen all go through it.
 That is what stops the drawn rect and the tappable rect drifting apart.
 
 Note one deliberate inversion in there: **the AC stepper's slots run backwards
@@ -835,15 +938,24 @@ action layer.
 It used to be one `CHIP_W`/`CHIP_PITCH` across a device card (4) and the Settings
 brightness card (5), so a control on one page was the same size as a control on the
 other. There are now three widths: `BULB_CHIP_W` 43 on a bulb, `CHIP_W` 54 on the
-brightness card, `ACM_W` 60 on the AC (where "COOL" needed 51px of the 52 that
-left). Each is fixed by its own row tiling `CARD_IN_W` 288 exactly, so they cannot
-be reconciled without re-cutting a row — don't "restore" one in isolation.
+brightness card, `ACM_W` 43 on the AC. The AC's number moved twice for two
+different reasons: first 54 → 60 (pre-inline) because "COOL" needed 51px of the
+52 a 54px chip left; then 60 → 43 when the AC went inline and had to fit its 3
+chips + stepper into the narrower 244px left after adopting the bulb's 44px
+identity column, same as `BULB_CHIP_W` had to. Landing on the *same* 43 as the
+bulb chip is coincidence, not a restored shared pitch — "COOL" only needs 31px
+of Font 2's, so there was room to spare either way. Each width is still fixed by
+its own row tiling `CARD_IN_W` (or, for the AC and a bulb now, `CARD_IN_W -
+BULB_ID_W`) exactly, so they cannot be reconciled without re-cutting a row —
+don't "restore" one in isolation.
 
 The bulb chip is the one target that got **smaller** in the axis that matters:
 43px against 54px horizontally, where the drawn height went 26 → 40 but the
-tappable height was always the 52px row band. `simulator.html` checks the labels
-still fit (`"100%"` is 33px of the 35px budget), but the touch cost is real and
-`pio run -e calib -t upload` is the thing to reach for if taps start missing.
+tappable height was always the 52px row band. The AC's mode chips paid the same
+cost when it went inline. `simulator.html` checks every chip's labels still fit
+(`"100%"` is 33px of the bulb chip's 35px budget; `"COOL"` is 31px of the AC
+chip's 35px), but the touch cost is real and `pio run -e calib -t upload` is
+the thing to reach for if taps start missing.
 
 Scenes ignores both grids and uses its own: `SCENE_COLS` × `SCENE_TILE_W/H` on a
 `SCENE_PITCH_X` / `SCENE_PITCH_Y` pitch, with `sceneTileX()`/`sceneTileY()` taking
@@ -863,24 +975,34 @@ the scroll gutter each clear only their own rect.
 - **Never let an unreachable device read as a normal state.** HA reports
   `unavailable`/`unknown`, which naively collapses to `on == false` and renders as
   a plain `OFF` — indistinguishable from a healthy bulb that is off.
-  `DeviceState::avail` exists for this. The treatment is now **the card's border in
-  `C_ERROR`**, a red icon outline, and every control greyed out because there is no
-  current state to highlight; on a bulb the name goes red too, being the only text
-  left on the card. The **AC** additionally shows the word: **`OFFLINE` and not
-  `UNAVAILABLE`** for a measured reason — at 75px against the latter's 122px it is
-  what lets a long device name sit beside it without being truncated, and it is the
-  plainer word besides. The bulb cards lost that word with their state line, which
-  is exactly why the border took the job.
-- **When a card's identity does not fit, the NAME is what loses.** On the AC the
-  state is short, live, and the reason to look at the card at all, while a name is
-  static and already known to whoever installed it. On a bulb there is no state
-  beside it and the budget is simply the identity column: `BULB_NAME_W` is 20px,
-  **two Font 2 characters**, which fits the shipped ordinal names (`1`/`2`/`3`) and
-  truncates anything longer hard. `textTrunc()` drops characters and appends "..",
-  and `simulator.html` warns by name whenever it fires, so this cannot happen
-  quietly (`?name=Bedside+reading+lamp`). The AC's exceptional-mode line drops the
-  word "Room" for the same reason — the number is unmistakably a temperature beside
-  its degree ring.
+  `DeviceState::avail` exists for this. The treatment is **the card's border in
+  `C_ERROR`**, a red icon outline, every control greyed out because there is no
+  current state to highlight, and the name in red too, being the only text left
+  on the card. That last part is now true of **every** device card, AC included:
+  the AC used to additionally show the word **`OFFLINE`** (not `UNAVAILABLE` —
+  at 75px against the latter's 122px it let a long device name sit beside it
+  without truncating, and it was the plainer word besides), but that state
+  string is gone along with the AC's stacked layout, the same way the bulb
+  cards lost theirs earlier — border + icon + red name now carries the alarm
+  on both kinds.
+- **The NAME is what loses when a card's identity does not fit.** Every device
+  card now budgets it the same way: `BULB_NAME_W` is 20px, **two Font 2
+  characters**, which fits the shipped ordinal bulb names (`1`/`2`/`3`) and the
+  AC's default (`AC`), truncating anything longer hard. `textTrunc()` drops
+  characters and appends "..", and `simulator.html` warns by name whenever it
+  fires, so this cannot happen quietly (`?name=Bedside+reading+lamp`). This
+  used to be a **bulb-only** rule — the AC's name lost to its live state
+  instead, being static and already known to whoever installed the device,
+  while the state was short, live, and the reason to look at the card at all —
+  but there is no longer a competing state string on that line to lose to, so
+  the AC's name now follows the same budget for the same reason (its room
+  temperature and humidity moved to the header instead, and get no comparable
+  truncation protection there — they are short by construction; see
+  `STATUS_ROOM_W`'s budget in `config.h`, sized for the worst *realistic* case
+  rather than the worst possible one). An exceptional mode (heat/fan_only/auto)
+  now loses its NAME entirely rather than being squeezed into that budget — the
+  icon's fallback to a plain power glyph is the only signal that mode still
+  gets.
 - **There is no degree glyph in either font.** `U+00B0` is outside the GFX fonts'
   0x20..0x7E charset, and a trailing "C" reads as a third digit at a glance. Both
   the setpoint and the room reading draw a 2px ring instead, positioned off
@@ -893,20 +1015,27 @@ the scroll gutter each clear only their own rect.
   and a settings toggle row is the whole row at any x — the track is an affordance,
   not the hit area. The 32px tab strip is the one exception, and it is the
   least-used control. The scene scroll gutter is 20 × 104 per arrow — thin, but
-  unlike the tab strip it sits in the band the 4-point fit *interpolates*.
+  mostly sits in the band the 4-point fit *interpolates*, unlike the tab strip,
+  which sits entirely inside whichever bezel band it extrapolates (the bottom
+  one now that the header has moved there).
 - **The AC setpoint is a stepper, not two buttons and a caption.** The row reads
   `[▼] 29° [▲]`, and the value sits in the grid slot *between* the two controls
   that change it — it used to be `set 29` on the row's top line beside `T+`/`T-`,
   which put the number and the arrows at opposite ends of the row. Three
-  consequences: the setpoint is **gone from `stateText()`** (repeating it would be
-  two numbers a step apart competing to be read); `AC_BTN_TEMP` is a **readout**,
+  consequences: the setpoint is **gone from the identity column** (it briefly
+  shared that column with the room reading `roomTempText()` drew there, which
+  argued against repeating the setpoint alongside it — two numbers a step
+  apart competing to be read; the room reading has since moved to the header,
+  but the setpoint never moved back, since a stepper's value belongs between
+  its own two controls regardless of what else is or isn't on the identity
+  line); `AC_BTN_TEMP` is a **readout**,
   so it draws no button, takes no press flash, and `screenHitTest()` reports a tap
   there as a **miss** — that dead cell is also what stops a slightly-off tap from
   stepping the wrong way, which the old adjacent `T+`/`T-` pair could not; and it
-  is a **text region compared by its rendered string**, like the row's top line,
+  is a **text region compared by its rendered string**, like the identity column,
   not a `BtnVis` byte. It compares on `stale`/`err` too, which is why
   `RowSnap::stale`/`err` are assigned at the *end* of `drawDeviceCard()` rather than
-  inside the top line's block — updating them there would consume the transition
+  inside region 1's block — updating them there would consume the transition
   before the setpoint region could see it.
 - **The steps are relative** and must no-op (setting `errMs`) until a real
   setpoint is known. Never guess a starting temperature. The readout shows `--`

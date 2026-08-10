@@ -187,62 +187,166 @@
 // erases a border PIXEL rather than an arc — still wrong, still guarded by
 // starting every in-card dirty rect at CARD_IN_X0, just for a simpler reason.
 
-// ── header (y 0..31) ─────────────────────────────────────
-// 32px, up from 22. The tab targets grew 24 -> 32px with it, which matters
-// because the 4-point touch fit EXTRAPOLATES above y=30 (CAL_INSET is 30) and
-// resistive panels are worst near the bezel: this is still the least accurate
-// band on the panel, so it gets the most height per target of anything here.
+// ── header (y 208..239, anchored to the BOTTOM edge) ─────
+// 32px, unchanged in height — moved, not resized. The tab targets don't need to
+// grow or shrink for the move: CAL_INSET (main.cpp, env:calib) insets 30px from
+// EVERY corner of the 4-point fit, so the touch calibration extrapolates
+// equally at the top bezel and the bottom one. The header was never made this
+// tall because ITS particular edge was worse than the other — a resistive panel
+// is worse at ANY bezel than in the middle — so relocating it costs nothing and
+// needs no recalibration.
 //
-// Three regions that TILE THE BAR EXACTLY (26 + 3*81 + 51 = 320). A gap leaves
-// pixels nothing ever clears; an overlap is just as bad, since each region only
-// clears its own rect, so whatever spills over is never repainted.
+// Four regions that TILE THE BAR EXACTLY (26 + 193 + 60 + 41 = 320), unchanged
+// in x. A gap leaves pixels nothing ever clears; an overlap is just as bad,
+// since each region only clears its own rect, so whatever spills over is
+// never repainted. The room-reading region is the newest of the four — see
+// STATUS_ROOM_W below for why it exists and what it cost the tab strip.
+//
+// The middle "193" (TAB_STRIP_W) is the space the 3 tabs lay out in, but it is
+// NOT 3 equal cells any more. A first attempt at a visible gap tried exactly
+// that — 3 uniform cells narrower than before, plus a small fixed gap between
+// them — and it did not work: with a wide UNIFORM cell, the label is centred
+// in it, so most of the "gap" a viewer sees either side of a short word like
+// "Scenes" is really slack INSIDE that word's own cell, not the explicit gap
+// between cells. Shrinking the cell only a little and adding a few px of real
+// gap barely moved the total, because the widest label ("Settings") still set
+// the uniform cell width every other tab had to share.
+//
+// So tab cells are now sized to their OWN label — measured via textW(F_MICRO,
+// ...), not a shared constant — with TAB_LBL_DX blank each side and a real
+// TAB_GAP between tabs. That removes the per-cell slack a short word used to
+// carry. Whatever's left of TAB_STRIP_W after 3 content-fit cells + 2 gaps
+// becomes a margin split evenly on the two OUTER edges (against the icon and
+// the room-reading region) rather than distributed between words — which is
+// what actually reads as "tabs sitting close together" instead of "tabs
+// spread across the header". See tabRect() in screen.cpp, which computes and
+// caches the 3 cells once; simulator.html's draw() does the equivalent
+// inline. The gaps AND the two outer margins are all static background —
+// nothing is ever drawn or hit-tested there, so, like the header rule sitting
+// outside every region's clear rect, they only need painting once on a full
+// invalidate, never per-frame.
+//
+// TAB_GAP was cut 18 -> 12 (still on the SP_* scale, at SP_3) on request, to
+// buy the room region enough width to draw its temperature and humidity in
+// F_TITLE instead of F_MICRO — see STATUS_ROOM_W. The 3 shipped labels need
+// 174px (3 content-fit cells + 2*TAB_GAP) of TAB_STRIP_W's 193, leaving 19px
+// of margin — 9-10 per side (tabRect()'s split floors, so the two sides need
+// not match). That margin grew back past its original ~57px-strip-era size
+// not because the tabs got more room on purpose, but as a side effect of
+// correcting STATUS_ROOM_W's humidity budget from "100%" to "99%" (see its
+// comment) — the pixels freed by that fix went to tightening the gap before
+// the clock, and whatever TAB_STRIP_W's formula picked up beyond that is
+// incidental, not a second deliberate squeeze. If TAB_LABEL ever grows a
+// wider word, tabRect()'s margin has more room to absorb it than it did
+// right after the room region first arrived — simulator.html's warning on
+// that arithmetic is still the thing to watch if it ever does.
 #define STATUS_H       32
+#define STATUS_Y0      (SCR_H - STATUS_H) // 208 — top edge of the header band
 #define STATUS_ICO_W   26                 // x   0..25  — one connectivity glyph
 #define TAB_X0         26
-#define TAB_W          81                 // x  26..268 — TAB_COUNT * TAB_W
+#define TAB_GAP        SP_3                // real gap between adjacent tabs — was 18
 #define TAB_COUNT      3                  // static_assert'd against PAGE_COUNT
-#define STATUS_CLK_W   51                 // x 269..319 — 24h clock
-// Content sits above the divider, so every header clear is STATUS_DIV_Y tall and
-// the 1px rule at the bottom survives them all and is painted once.
-#define STATUS_DIV_Y   (STATUS_H - 1)     // 31
-#define STATUS_CY      15                 // header content centre line
+// The clock's own sub-region, unchanged in role but narrowed: it used to be
+// the whole right-hand region (51px, ~10px of it unused slack) before the AC's
+// room reading moved in beside it (see STATUS_ROOM_W). "23:45"/"--:--" are
+// both <=35px in F_TITLE (digits are 8px apiece, "-" is 6, ":" is 3), and the
+// clock is right-aligned SP_2-2 (6px) off the screen edge — 35 + 6 = 41, with
+// zero pixels of left slack rather than the old ~10px cushion. Tightening
+// this is what bought the room block its own width without cutting any
+// further into the tab strip's margin.
+#define STATUS_CLK_W   41                 // x 279..319 — 24h clock
+// The AC's live room reading, relocated here from its own card (see the AC
+// card comment above BULB_ID_W) on request, so it reads on every page rather
+// than only Devices. drawStatusRoom() (screen.cpp) draws it by reusing
+// roomTempText()/humidityText() — the same two functions the card used to
+// call — left-aligned as: <temp><ring> <humidity> / , immediately before the
+// clock region.
+//
+// The temperature and humidity are F_TITLE now, not F_MICRO — bumped one
+// size on request to match the clock beside them, which is what this region
+// used to look undersized next to. TAB_GAP paid for it (see above); the
+// separator "/" stayed F_MICRO on purpose, since it is punctuation, not data,
+// and a small quiet mark between two bigger numbers reads more clearly than
+// a third same-size glyph competing with them.
+//
+// Sized for the worst REALISTIC case, not the worst POSSIBLE one, on BOTH
+// numbers now — an indoor Sensibo sensor in an air-conditioned bedroom does
+// not read 100% relative humidity any more than it reads a -10C temperature;
+// treating a percentage's mathematical ceiling as the thing to budget for was
+// the same error the temperature side already knew to avoid, corrected here
+// on request. F_TITLE's digits are 8px apiece and "%" is 9px (against
+// F_MICRO's flat 6px advance), so this grew with the font even at 2 digits:
+//   "27"(16) + ring(5) + gap(4) + "99%"(25) + gap(4) + "/"(6, F_MICRO) = 60
+// Zero leftover — no separate gap-before-clock term, because drawStatusRoom()
+// adds no gap of its own after the "/"; the trailing gap is entirely
+// whatever this budget doesn't spend, and it was cut to nothing on request.
+// A genuinely out-of-range reading on EITHER number (ha.cpp's temperature
+// sanity band is a broad -10..60C; humidity has no such check today, so a
+// stuck sensor could in principle report 100) draws PAST the region's right
+// edge, into the clock's own territory — content grows rightward from a
+// fixed left edge (drawStatusRoom(), screen.cpp), so overflow spills toward
+// the clock, not back toward the tabs. Accepted rather than widening every
+// render for a sensor fault that already flashes the card border elsewhere,
+// and it is self-healing regardless: drawStatusRoom()'s own clear only
+// covers STATUS_ROOM_W, so a stray overflow pixel would sit past it until
+// the clock's next per-minute repaint clears that whole region anyway —
+// worst case a 59-second-old artifact, never a permanently wrong reading.
+
+#define STATUS_ROOM_W  60                 // x 219..278 — AC room temp + humidity
+#define TAB_STRIP_W    (SCR_W - STATUS_ROOM_W - STATUS_CLK_W - TAB_X0) // 193
+// The divider is now at the TOP of the header band — the seam with the body
+// above it — rather than the bottom, because the header sits below the body
+// instead of above it. Content sits BELOW the divider (mirrored from the old
+// top-anchored layout, not merely shifted), so every header clear starts at
+// STATUS_DIV_Y+1 and is STATUS_H-1 tall, and the 1px rule survives every one of
+// those clears because it sits outside all of them and is painted once.
+#define STATUS_DIV_Y   STATUS_Y0          // 208
+#define STATUS_CY      (STATUS_DIV_Y + 16) // 224 — header content centre line
 #define STATUS_ICO_CX  13
-// Tab indicator: a 2px underline SEATED ON the header rule, not a pill. The
-// filled pill made the three tabs the most button-like things on the panel,
-// competing with the 23 controls in the body that actually are buttons — and it
-// used the same solid-accent fill that means "selected" on a chip, so the header
-// read as a fourth row of controls. An underline says "you are here" and nothing
-// about being pressable, which is what the header is for.
+// Tab indicator: a 2px underline SEATED ON the header rule, not a pill — from
+// BELOW now, since the rule sits at the top of the band instead of the bottom.
+// Everything this used to say about being an underline rather than a filled
+// pill, and about spanning the word rather than the cell, is unchanged; only
+// which edge of the cell it seats against has flipped, and wTab() flipped with
+// it (see widgets.cpp).
 //
-// TAB_UL_Y + TAB_UL_H lands exactly on STATUS_DIV_Y, so the bar stacks directly
-// on the 1px rule and the two read as one line: a 1px gap between them would
-// look like a misprint. It must also stay at or above STATUS_DIV_Y because every
-// header clear is exactly that tall — the rule below is painted once and must
-// survive, while the indicator has to be inside a rect that gets cleared, or a
-// tab that stops being current would keep its bar forever.
+// TAB_UL_Y sits exactly one row past STATUS_DIV_Y, so the bar stacks directly
+// under the 1px rule and the two read as one line: a 1px gap between them would
+// look like a misprint. It must also stay at or below STATUS_DIV_Y+1 for the
+// mirror-image reason the old bound existed — one row higher and it would
+// overwrite the rule, which is painted once and never restored, while the
+// indicator has to be inside a rect that gets cleared, or a tab that stops
+// being current would keep its bar forever.
 //
-// 2px and not 3, though the margin is no longer what set it: the label centres
-// on STATUS_CY in F_BODY, and Font 2 descends only 7px below that centre where
-// FreeSans went 11, so "Settings"' g now reaches y 22 against a bar at y 29 —
-// 7px of air rather than the 1px that originally forced 2 over 3. It stays 2
-// because it is an underline and not a rule; simulator.html asserts the
-// clearance rather than trusting either number in this comment.
+// 2px and not 3, though the margin is no longer what set it: the label used to
+// centre on STATUS_CY in F_BODY, whose Font 2 descends 7px below that centre —
+// "Settings"' g reached STATUS_CY+7 with the bar only 8px clear of it. The tab
+// label is F_MICRO now (one step down from F_BODY, on request, to shrink the
+// label enough that TAB_GAP could open up between tabs without widening the
+// header), and F_MICRO's Font 1 descends only 3px below centre — MORE
+// clearance than before, not less, so TAB_UL_H=2 needed no change.
+// simulator.html asserts the clearance rather than trusting either number here.
 //
-// The label budget is the whole cell less SP_1 a side (73px), and the widest
-// label ("Settings") is 49px in Font 2, down from 65px in FreeSans. Nothing here
-// is remotely close to a fit failure — but TAB_W stays 81, since it is fixed by
-// the header tiling above, not by the widest word.
+// Each cell is its own label's width plus TAB_LBL_DX a side, by construction
+// (tabRect()), so there is no separate "label budget" to check the way a
+// fixed-width cell needed one — textFit()'s maxW is exactly the label's own
+// measured width and can never be tight. F_MICRO's monospace 6px advance
+// puts the widest label ("Settings") at 48px, against 49px in F_BODY's
+// Font 2 — shrinking the font bought almost no width back on its own, which
+// is the same reason a uniform cell couldn't be shrunk into a tight gap
+// either; see the TAB_STRIP_W comment above.
 #define TAB_UL_H       2
-#define TAB_UL_Y       (STATUS_DIV_Y - TAB_UL_H)     // 29..30
+#define TAB_UL_Y       (STATUS_DIV_Y + 1)            // 209..210
 #define TAB_UL_PAD     2                             // bleed each side of label
-#define TAB_LBL_DX     SP_1
+#define TAB_LBL_DX     SP_1                          // blank each side of a tab's own label
 #define TAB_TAP_H      STATUS_H
 
-// ── body (y 32..239) ─────────────────────────────────────
-// 4 row bands of 52 tile the body EXACTLY: 32 + 4*52 = 240. Devices and
-// Settings both use this grid via rowTop(); a leftover sliver at the bottom is
-// the failure this arithmetic exists to prevent.
-#define ROWS_Y0        32
+// ── body (y 0..207) ──────────────────────────────────────
+// 4 row bands of 52 tile the body EXACTLY: 4*52 = 208 = STATUS_Y0, now that the
+// header sits below the body instead of above it. Devices and Settings both use
+// this grid via rowTop(); a leftover sliver above the header is the failure
+// this arithmetic exists to prevent.
+#define ROWS_Y0        0
 #define ROW_H          52
 
 // Each band holds one CARD inset 2px top and bottom, which is what produces
@@ -267,8 +371,8 @@
 
 // STACKED card internals, as offsets from the card top: line 1 is identity +
 // live state, line 2 is the controls — 1 pad + 18 line1 + 1 gap + 26 controls +
-// 2 pad = 48. This is now the AC card and the Settings brightness card only;
-// the three bulb cards went inline and use the BULB_* block below instead.
+// 2 pad = 48. This is now the Settings brightness card ONLY — every device
+// card (bulbs and the AC) is inline and uses the BULB_* block below instead.
 // CARD_L1_CY is 8, which under FreeSans was the largest value that kept a
 // lowercase name's descenders out of the control row. Font 2's ink spans only
 // cy-5..cy+7, so those tails now stop at y+15 with 5px to spare — the constraint
@@ -290,9 +394,11 @@
 #define CARD_ICO_CX    (CARD_X + 15)      // 23 — status icon centre
 #define CARD_ICO_R     7                  // 14px optical icon box
 #define CARD_TXT_X     (CARD_X + 28)      // 36 — text starts clear of the icon
+// Settings' segmented-chip rows (brightness, night mode) ONLY now — every
+// device card, AC included, uses BULB_CTL_DY/BULB_CTL_H instead. 26px, up from
+// 22: the card inset and pads paid for it, so the drawn control is nearer the
+// 52px row band screenHitTest() has always accepted vertically.
 #define CTL_DY         20                 // control row top
-// 26px, up from 22: the card inset and pads paid for it, so the drawn control
-// is nearer the 52px row band screenHitTest() has always accepted vertically.
 #define CTL_H          26                 // control row height
 
 // CHIP GRID — 5 across the Settings brightness card. 5*54 + 4*4 = 286 (x 16..301).
@@ -308,14 +414,18 @@
 // ── bulb card: ONE INLINE ROW ────────────────────────────
 // [icon name] [OFF][1%][30%][100%] (o)(o)  — identity and controls on the same
 // line, so the controls get the card's full height instead of the 26px strip
-// under a state line. The AC card is unchanged and still stacks its two lines;
-// btnRect() is the only place that knows the difference.
+// under a state line. The AC card now shares this same identity column and
+// control band (BULB_ID_W, BULB_CTL_DY, BULB_CTL_H below) — its mode chips and
+// stepper only differ in what they draw and how many slots they use, not in
+// where the row sits. btnRect() is the only place that knows the difference.
 //
 // THE BULB CARD HAS NO STATE TEXT. With the controls spanning the full width
 // there is nowhere to put "30%  2700K", so the live reading is carried by the
 // icon (real colour temperature, blended by real brightness) plus which chip is
 // lit. See the OFFLINE note in screen.cpp for what replaced the one state string
-// that was doing safety work rather than reporting a value.
+// that was doing safety work rather than reporting a value. The AC now follows
+// the same rule — see the AC identity block below for what replaced ITS state
+// string.
 //
 // x tiles the card EXACTLY: 44 + 4*43 + 3*4 + 2*30 = 288 = CARD_IN_W.
 // The chips are narrower than the 54 they were (the identity column is paid for
@@ -349,18 +459,40 @@
 #define SW_CELL_W      30                 // tap cell; the circle is smaller
 #define SW_R           13                 // 26px circle in the 40px row
 
-// AC card: 3 mode chips then the setpoint stepper, tiling the same 288px.
-// 3*60 + 2*4 = 188 (x 16..203), then 28 + 44 + 28 = 100 (x 204..303).
-// Mode chips became 60 rather than 54 because "COOL" needed 51px of the 52 a
-// 60px chip leaves — the one place a label ever decided a width. In Font 2 that
-// same word is 31px and would fit a 54px chip easily, so the original reason is
-// spent; 60 stays because these three chips and the 100px stepper tile the
-// card's 288px exactly, and that is now what fixes the number.
-#define ACM_W          60
-#define ACM_PITCH      (ACM_W + CHIP_GAP)            // 64
-#define ACS_X0         (CARD_IN_X0 + 3 * ACM_PITCH - CHIP_GAP)    // 204
+// AC card: now INLINE like the bulb cards — an icon + a single centred name
+// line in the same BULB_ID_W column, then 3 mode chips and the setpoint
+// stepper filling the same BULB_CTL_X0..CARD_IN_X1 span the bulb chips and
+// swatches fill, at the same BULB_CTL_DY/BULB_CTL_H height. That is the whole
+// point of this pass: the AC's control band used to sit in its own 26px strip
+// (CTL_DY/CTL_H) lower in a shorter card, visibly out of step with the bulb
+// rows above and below it on the Devices page. The AC's live room reading
+// used to live here too, as two extra lines stacked under the name — it has
+// since moved to the header (STATUS_ROOM_W above), on request, so it reads on
+// every page rather than only Devices, and the identity column is back to
+// the bulb's plain single line as a result.
+//
+// Budget: CARD_IN_W(288) - BULB_ID_W(44) = 244, identical to what the bulb's 4
+// chips + 3 gaps + 2 swatches already fill after BULB_CTL_X0 — the AC's 3 chips
+// + stepper now tile that SAME 244px, not the AC card's old undivided 288px.
+// 3*43 + 2*4 = 137 (chips), + one more CHIP_GAP before the stepper, then
+// 28 + 47 + 28 = 103 (stepper) = 137 + 4 + 103 = 244 exactly.
+// ACM_W dropped from 60 to 43 — the same width as BULB_CHIP_W, not because the
+// two share a pitch (they don't; this is coincidence of both needing to fit the
+// same 244px after the same 44px column), but "COOL" only needs 31px of Font
+// 2's, so a 43px chip (35px label budget) still has room to spare. ACS_VAL_W
+// grew from 44 to 51 on the first cut, absorbing what shrinking the chips
+// freed with no gap at all before the stepper — DRY sat flush against the
+// down chevron, the one seam on the row with no CHIP_GAP of air, which read as
+// a mistake next to the evenly-spaced bulb chips beside it. ACS_VAL_W gave
+// back 4px to that gap (51 -> 47), landing 3px above the 44 it used before
+// this pass ever touched it, rather than shrinking ACS_BTN_W — 28 was already
+// a proven, comfortable chevron target.
+#define ACM_W          43
+#define ACM_PITCH      (ACM_W + CHIP_GAP)            // 47
+#define ACS_X0         (BULB_CTL_X0 + 3 * ACM_PITCH)   // 201 — CHIP_GAP clear of DRY
 #define ACS_BTN_W      28                 // one chevron
-#define ACS_VAL_W      44                 // the readout between them
+#define ACS_VAL_W      47                 // the readout between them
+
 
 // ── Settings page ────────────────────────────────────────
 // 4 cards on the same row grid. Rows 0 and 1 are discrete segmented controls
@@ -403,7 +535,7 @@
 // full size with room to spare, which is what a scene tile is actually for —
 // 9 legible tiles per page beat 12 illegible ones, and the page still scales.
 //
-// The grid TILES the body exactly in y (32 + 2*72 + 64 = 240), the same
+// The grid TILES the body exactly in y (2*72 + 64 = 208 = STATUS_Y0), the same
 // no-stranded-pixels rule the device rows follow. In x it stops short of
 // SCENE_SB_X0 so the gutter and the tiles never overlap — each region only ever
 // clears its own rect, so an overlap leaves pixels nothing repaints.
@@ -432,14 +564,17 @@
 #define SCENE_NAME_DY   42                // scene name centre line
 
 // Scroll gutter: x 300..319, chevrons top and bottom. 20 x 104 per arrow —
-// thin, but it sits in the middle band the 4-point touch fit INTERPOLATES rather
-// than the top band it extrapolates, so it is nothing like as marginal as the
-// tab strip. Drawn empty and dead to taps whenever every scene fits on one page,
-// which is the case today, so the current UI gains no affordance it can't use.
+// mostly in the band the 4-point touch fit INTERPOLATES, unlike the tab strip
+// which sits entirely inside a bezel band it extrapolates, so it is nothing
+// like as marginal. Drawn empty and dead to taps whenever every scene fits on
+// one page, which is the case today, so the current UI gains no affordance it
+// can't use.
 #define SCENE_SB_X0     300
 #define SCENE_SB_W      (SCR_W - SCENE_SB_X0)           // 20
-// Tap split between the two arrows: y 32..135 scrolls up, 136..239 down.
-#define SCENE_SB_MID    ((ROWS_Y0 + SCR_H) / 2)
+// Tap split between the two arrows: y 0..103 scrolls up, 104..207 down — the
+// body's own range, not the panel's, now that the header sits below it rather
+// than sharing the screen's bottom edge with it.
+#define SCENE_SB_MID    ((ROWS_Y0 + STATUS_Y0) / 2)
 
 #define NUM_DEVICES    4
 // Devices 0..2 are the bulbs, device 3 is the AC. Scenes act on the bulbs only.

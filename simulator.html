@@ -24,8 +24,8 @@
 </style>
 
 <div>
-  <h1>CYD 320&times;240 &mdash; 3&times;</h1>
-  <canvas id="c" width="960" height="720"></canvas>
+  <h1>CYD 320&times;240 &mdash; 1&times;</h1>
+  <canvas id="c" width="320" height="240"></canvas>
 </div>
 
 <div class="panel">
@@ -82,21 +82,41 @@ const SCR_W=320, SCR_H=240;
 const SP_1=4, SP_2=8, SP_3=12, SP_4=16, SP_6=24;
 // No radius token: corners are square everywhere, so rect() takes no r.
 
-// header
-const STATUS_H=32, STATUS_ICO_W=26, TAB_X0=26, TAB_W=81, TAB_COUNT=3,
-      STATUS_CLK_W=51, STATUS_DIV_Y=STATUS_H-1, STATUS_CY=15, STATUS_ICO_CX=13;
-// Underline indicator, seated on the header rule. 2px so "Settings"' descenders
-// keep clear of it — asserted below, not assumed.
-const TAB_UL_H=2, TAB_UL_Y=STATUS_DIV_Y-TAB_UL_H, TAB_UL_PAD=2, TAB_LBL_DX=SP_1,
+// header — anchored to the BOTTOM edge, not the top. Moved on request; the
+// divider is now at the TOP of the band (the seam with the body above it), and
+// content sits below it, mirrored from the old top-anchored layout.
+// STATUS_CLK_W narrowed 51->41 (35px clock + 6px right margin, zero left
+// slack now) and STATUS_ROOM_W is new: the AC's room reading, relocated here
+// from its card on request (see roomTempText()/humidityText() below and
+// drawStatusRoom() below) so it reads on every page. Its temperature and
+// humidity are F_TITLE, not F_MICRO — bumped one size on request to match
+// the clock beside them; the "/" separator stayed F_MICRO (punctuation, not
+// data). TAB_GAP paid for the extra width (18->12, still on the SP_* scale).
+// Humidity's budget is 2 digits ("99%"), not 3 ("100%") — an indoor AC'd
+// bedroom sensor doesn't read 100% relative humidity any more than the room
+// reads -10C, so padding for that ceiling was the same realistic-case error
+// the temperature side already knew to avoid; corrected on request.
+// Budget: "27"(16) + ring(5) + gap(4) + "99%"(25) + gap(4) + "/"(6) = 60, of
+// 60 — zero leftover, so zero gap before the clock (drawStatusRoom() adds no
+// gap of its own after the "/", so this constant is the only thing that sets
+// it, and it was cut on request as far as the content allows).
+const STATUS_H=32, STATUS_Y0=SCR_H-STATUS_H, STATUS_ICO_W=26, TAB_X0=26, TAB_GAP=SP_3,
+      TAB_COUNT=3, STATUS_CLK_W=41, STATUS_ROOM_W=60,
+      TAB_STRIP_W=SCR_W-STATUS_ROOM_W-STATUS_CLK_W-TAB_X0,
+      STATUS_DIV_Y=STATUS_Y0, STATUS_CY=STATUS_DIV_Y+16, STATUS_ICO_CX=13;
+// Underline indicator, seated on the header rule FROM BELOW now (the rule is at
+// the top of the band). 2px so "Settings"' descenders keep clear of it —
+// asserted below, not assumed.
+const TAB_UL_H=2, TAB_UL_Y=STATUS_DIV_Y+1, TAB_UL_PAD=2, TAB_LBL_DX=SP_1,
       TAB_TAP_H=STATUS_H;
 
-// body / cards
-const ROWS_Y0=32, ROW_H=52;
+// body / cards — y 0..207 now that the header has moved off the top.
+const ROWS_Y0=0, ROW_H=52;
 const CARD_DY=2, CARD_H=ROW_H-2*CARD_DY, CARD_X=SP_2, CARD_W=SCR_W-2*SP_2,
       CARD_PAD=SP_2, CARD_IN_X0=CARD_X+CARD_PAD, CARD_IN_X1=CARD_X+CARD_W-CARD_PAD-1,
       CARD_IN_W=CARD_W-2*CARD_PAD;
-// STACKED card internals — the AC card and the Settings brightness card. The
-// three bulb cards are inline and use the BULB_* block below.
+// STACKED card internals — the Settings brightness card ONLY now. Every device
+// card (bulbs and the AC) is inline and uses the BULB_* block below.
 const CARD_L1_CY=8, CARD_L1_Y=1, CARD_L1_H=19,
       CARD_ICO_CX=CARD_X+15, CARD_ICO_R=7, CARD_TXT_X=CARD_X+28,
       CTL_DY=20, CTL_H=26;
@@ -114,8 +134,17 @@ const BULB_ID_W=44, BULB_CTL_X0=CARD_IN_X0+BULB_ID_W, BULB_CHIP_W=43,
       BULB_NAME_W=BULB_CTL_X0-SP_1-CARD_TXT_X,
       BULB_CTL_DY=4, BULB_CTL_H=CARD_H-2*BULB_CTL_DY;
 const SW_X0=BULB_CTL_X0+4*BULB_CHIP_PITCH-CHIP_GAP, SW_CELL_W=30, SW_R=13;
-const ACM_W=60, ACM_PITCH=ACM_W+CHIP_GAP,
-      ACS_X0=CARD_IN_X0+3*ACM_PITCH-CHIP_GAP, ACS_BTN_W=28, ACS_VAL_W=44;
+// AC card, inline like a bulb: 3 mode chips + stepper now tile the SAME 244px
+// (CARD_IN_W - BULB_ID_W) a bulb's chips+swatches fill, starting at
+// BULB_CTL_X0 rather than CARD_IN_X0. ACM_W dropped 60->43 (coincidentally
+// equal to BULB_CHIP_W). ACS_X0 leaves a CHIP_GAP after the 3rd chip (DRY)
+// before the stepper, same as every other chip-to-chip seam on the row —
+// ACS_VAL_W gave back 4px (51->47) to buy that gap rather than removing it.
+const ACM_W=43, ACM_PITCH=ACM_W+CHIP_GAP,
+      ACS_X0=BULB_CTL_X0+3*ACM_PITCH, ACS_BTN_W=28, ACS_VAL_W=47;
+// The AC's room reading used to stack two more lines here (temp/humidity)
+// under its name — that moved to the header (STATUS_ROOM_W above) on
+// request, so the AC's identity column is back to a bulb's plain single line.
 
 // settings
 const SET_ROWS=4, SET_ROW_BRI=0, SET_ROW_NIGHT=1, SET_ROW_SCHED=2, SET_ROW_FLIP=3;
@@ -130,7 +159,7 @@ const SCENE_COLS=3, SCENE_VIS_ROWS=3, SCENE_TILE_W=88, SCENE_TILE_H=64,
       SCENE_PITCH_X=SCENE_TILE_W+SCENE_GAP_X, SCENE_PITCH_Y=SCENE_TILE_H+SCENE_GAP_Y,
       SCENE_PER_PAGE=SCENE_COLS*SCENE_VIS_ROWS;
 const SCENE_PIP_DY=19, SCENE_PIP_R=4, SCENE_PIP_GAP=16, SCENE_NAME_DY=42;
-const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+SCR_H)>>1;
+const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+STATUS_Y0)>>1;
 
 const NUM_DEVICES=4, NUM_BULBS=3, BULB_BTNS=6, AC_BTNS=6;
 const AC_BTN_TUP=3, AC_BTN_TEMP=4, AC_BTN_TDN=5;
@@ -319,6 +348,7 @@ const THEME_LIST=[
   ['ERROR',   '#ff4d6a', 0xF800, 0xF901],
   ['WARM',    '#ffb05c', 0x7000, 0xFA81],
   ['COOL',    '#a6cdff', 0xD800, 0xA2E3],
+  ['BRI',     '#ffd100', null,   0xFC40],
 ];
 const to565=h=>((parseInt(h.slice(1,3),16)&0xF8)<<8)|
                ((parseInt(h.slice(3,5),16)&0xFC)<<3)|
@@ -365,7 +395,13 @@ function applyTheme(mode){
 // survive the collapse to red.
 const MUST_DIFFER=[['DIM','ERROR'],['SUCCESS','ACCENT'],['WARM','COOL'],
                    ['TEXT','TEXT2'],['TEXT2','TEXT3'],['TEXT3','DISABLED'],
-                   ['NEUTRAL','ELEVATED'],['NEUTRAL','ACCENT']];
+                   ['NEUTRAL','ELEVATED'],['NEUTRAL','ACCENT'],
+                   // BRI is a bulb card's own selected-chip fill, so it has to
+                   // survive red-only night mode against every other fill that
+                   // can appear on the same card: OFF's neutral grey, the
+                   // shared accent (a colour-temp swatch), and the warm/cool
+                   // swatch discs themselves.
+                   ['BRI','NEUTRAL'],['BRI','ACCENT'],['BRI','WARM'],['BRI','COOL']];
 function checkNightLadder(){
   const lvl={};
   for(const [name,day,ovr] of THEME_LIST)
@@ -384,7 +420,7 @@ function checkNightLadder(){
 // Shift's output is NOT monochrome (unlike redOnly()'s), so a single red-level
 // ladder can't certify it: WARM/COOL are told apart mainly by the red channel
 // despite similar luminance, while DIM/ERROR differ by hue at a small
-// luminance gap. Check (a) all 17 values pairwise-unique and (b) a per-channel
+// luminance gap. Check (a) all 18 values pairwise-unique and (b) a per-channel
 // delta on the same MUST_DIFFER pairs, not a single blended number.
 function checkShiftDistinct(){
   const val={};
@@ -461,7 +497,7 @@ function errFlash(){ errAt=Date.now(); draw(); setTimeout(()=>{errAt=0;draw();},
 const isErr=()=>errAt&&Date.now()-errAt<1500;
 function setAll(on){ dev.forEach(d=>{ if(d.kind==='light') d.on=on; }); draw(); }
 
-const cv=document.getElementById('c'), g=cv.getContext('2d'), S=3;
+const cv=document.getElementById('c'), g=cv.getContext('2d'), S=1;
 g.scale(S,S);
 const log=document.getElementById('log');
 let warnings=[];
@@ -475,19 +511,18 @@ const sceneTileX = s => SCENE_X0+(s%SCENE_COLS)*SCENE_PITCH_X;
 const sceneTileY = s => ROWS_Y0+Math.floor(s/SCENE_COLS)*SCENE_PITCH_Y;
 
 // The one function that knows the two row kinds lay out the same six slots
-// differently — including the AC stepper's reversed slot order (5 left, 3 right).
-// They now differ in y as well: a bulb row is inline, so its controls take the
-// card's full height beside the identity column, where the AC's sit in the 26px
-// strip under its state line.
+// differently IN X — including the AC stepper's reversed slot order (5 left, 3
+// right). They share one Y band now (BULB_CTL_DY/BULB_CTL_H): the AC's control
+// row used to sit in its own shorter strip under a separate state line, out of
+// step with the bulb rows around it; that is gone along with its stacked layout.
 function btnRect(i,b){
+  const y=cardTop(i)+BULB_CTL_DY, h=BULB_CTL_H;
   if(dev[i].kind==='climate'){
-    const y=cardTop(i)+CTL_DY, h=CTL_H;
-    if(b<3) return {x:CARD_IN_X0+b*ACM_PITCH, y, w:ACM_W, h};
+    if(b<3) return {x:BULB_CTL_X0+b*ACM_PITCH, y, w:ACM_W, h};
     if(b===AC_BTN_TDN)  return {x:ACS_X0,                       y, w:ACS_BTN_W, h};
     if(b===AC_BTN_TEMP) return {x:ACS_X0+ACS_BTN_W,             y, w:ACS_VAL_W, h};
     return {x:ACS_X0+ACS_BTN_W+ACS_VAL_W,                       y, w:ACS_BTN_W, h};
   }
-  const y=cardTop(i)+BULB_CTL_DY, h=BULB_CTL_H;
   if(b<4) return {x:BULB_CTL_X0+b*BULB_CHIP_PITCH, y, w:BULB_CHIP_W, h};
   return {x:SW_X0+(b-4)*SW_CELL_W, y, w:SW_CELL_W, h};
 }
@@ -566,6 +601,7 @@ function ctlColour(vis){
     case 'pressed':  return {fill:C.TEXT,     edge:C.TEXT,     fg:C.BG};
     case 'active':   return {fill:C.ACCENT,   edge:C.ACCENT,   fg:C.BG};
     case 'activeOff':return {fill:C.NEUTRAL,  edge:C.NEUTRAL,  fg:C.BG};
+    case 'activeBri':return {fill:C.BRI,      edge:C.BRI,      fg:C.BG};
     case 'disabled': return {fill:C.BG,       edge:C.BG,       fg:C.DISABLED};
     case 'err':      return {fill:C.BG,       edge:C.ERROR,    fg:C.ERROR};
     default:         return {fill:C.ELEVATED, edge:C.ELEVATED, fg:C.TEXT2};
@@ -614,15 +650,19 @@ function wValue(r,val,degree,fg,bg){
     disc(bx+vw+5,ry,3,null,fg); disc(bx+vw+5,ry,2,null,fg);
   }
 }
-// The bar is flush with the bottom of the rect, which is what seats it on the
-// header rule; it spans the word rather than the cell.
+// The bar is flush with the TOP of the rect, which is what seats it on the
+// header rule now that the header sits at the bottom of the screen (the rule
+// is at the top of the band, not the bottom); it spans the word rather than
+// the cell.
 function wTab(x,y,w,h,label,vis){
   const sel=(vis==='active'||vis==='pressed');
-  textFit('BODY',label,null,x+w/2,y+h/2,w-2*TAB_LBL_DX,sel?C.TEXT:C.TEXT3,'tab');
+  // MICRO, not BODY — mirrors wTab() in widgets.cpp: the tab label dropped one
+  // font size, on request, to buy room for TAB_GAP between tabs.
+  textFit('MICRO',label,null,x+w/2,y+h/2,w-2*TAB_LBL_DX,sel?C.TEXT:C.TEXT3,'tab');
   if(!sel) return;
-  const uw=Math.min(textW('BODY',label)+2*TAB_UL_PAD,w);
+  const uw=Math.min(textW('MICRO',label)+2*TAB_UL_PAD,w);
   g.fillStyle=vis==='pressed'?C.TEXT:C.ACCENT;
-  g.fillRect(x+Math.floor((w-uw)/2),y+h-TAB_UL_H,uw,TAB_UL_H);
+  g.fillRect(x+Math.floor((w-uw)/2),y,uw,TAB_UL_H);
 }
 
 // ── icons: same construction as src/ui/icons.cpp ─────────────────────────────
@@ -713,27 +753,17 @@ function drawIcon(v,cx,cy){
     default:       icoBulb(cx,cy,v.colour,false);
   }
 }
-function prettyMode(m){
-  return {heat:'HEAT',fan_only:'FAN',auto:'AUTO',unavailable:'UNAVAIL'}[m] || (m||'?');
+// AC ONLY. Used to feed the AC card's identity column (two short lines under
+// the name); that moved to the header on request (STATUS_ROOM_W, drawStatus()
+// below) so it reads on every page, not just Devices. Two things a
+// card-based version of this used to also do are gone rather than left
+// unreachable: the "OFFLINE" word (the border/icon/name colour already carry
+// that, same as a bulb) and naming an exceptional mode (heat/fan_only/auto —
+// the icon falls back to a plain power glyph for those now).
+function roomTempText(d){
+  if(!d.known||!d.avail||d.room==null) return {s:'--',deg:false};
+  return {s:`${d.room}`,deg:true};
 }
-// AC ONLY. The bulb cards went inline and dropped their state line, so the
-// branch that produced "30%  2700K" / "Off" is gone rather than left unreachable.
-function stateText(d){
-  if(!d.known) return {s:'--',deg:false};
-  // "OFFLINE", not "UNAVAILABLE": 75px against 122px, which is what keeps a long
-  // device name from being truncated in the one state where the name still
-  // matters for identifying WHICH device went away.
-  if(!d.avail) return {s:'OFFLINE',deg:false};
-  const charted = d.mode==='off'||d.mode==='cool'||d.mode==='dry';
-  // An exceptional mode drops the "Room" label rather than the device name.
-  if(d.room!=null)
-    return {s: charted?`Room ${d.room}`:`${prettyMode(d.mode)}  ${d.room}`, deg:true};
-  return {s: charted?'':prettyMode(d.mode), deg:false};
-}
-// Trails the room reading, right of the degree ring. Shown whenever a reading
-// exists — independent of stateText()'s `deg`, since humidity is still worth a
-// card even in an exceptional mode where the room temperature itself was
-// dropped for the mode name.
 function humidityText(d){
   if(!d.known||!d.avail||d.humidity==null) return '';
   return `${d.humidity}%`;
@@ -749,37 +779,28 @@ function drawDevices(){
     const alarm=err||!d.avail;
     rect(CARD_X,top,CARD_W,CARD_H,C.BG,alarm?C.ERROR:C.BORDER);
 
-    // The AC's identity is the top line of a stacked card; a bulb's is centred in
-    // the single inline row, beside its controls.
-    const idCy=top+(ac?CARD_L1_CY:CARD_H/2);
+    // Every device card is inline, sharing one identity column
+    // (BULB_ID_W/BULB_NAME_W): the icon centres on CARD_H/2 on every card, and
+    // a single name line shares that centre — the AC's room reading used to
+    // draw two more lines here; it now lives in the header instead (see
+    // drawStatusRoom() below), so the AC's identity column matches a bulb's.
+    const idCy=top+CARD_H/2;
     drawIcon(iconVis(d,stale),CARD_ICO_CX,idCy);
 
-    const st=ac?stateText(d):{s:'',deg:false};
-    const hum=ac?humidityText(d):'';
-    const stFg=(err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT2);
-    // Humidity sits right of the room reading's degree ring, sharing stFg —
-    // mirrors drawDeviceCard()'s stW/stEndX split in screen.cpp.
-    const humW=hum?textW('BODY',hum):0, humGap=hum?SP_2:0;
-    const stW=textW('BODY',st.s)+(st.deg?9:0)+humGap+humW;
-    const stEndX=CARD_IN_X1-humGap-humW;
-    // A bulb has no state beside it, so its name budget is the fixed identity
-    // column rather than whatever the state text leaves. It also takes the alarm
-    // colour, being the only text left on that card.
-    textTrunc('TITLE',d.name,CARD_TXT_X,idCy,
-              ac?CARD_IN_X1-CARD_TXT_X-stW-SP_2:BULB_NAME_W,
-              (!ac&&alarm)?C.ERROR:(stale?C.DIM:C.TEXT), `row ${i} name`);
-    if(st.s){
-      gtext('BODY',st.s,stEndX-(st.deg?9:0),idCy,'right',stFg);
-      if(st.deg) disc(stEndX-3,idCy+INK_TOP.BODY+2,2,null,stFg);
-    }
-    if(hum) gtext('BODY',hum,CARD_IN_X1,idCy,'right',stFg);
+    // The name takes the alarm colour on every card kind now — the only text
+    // left to carry that once OFFLINE (or an AC's exceptional-mode name) is gone.
+    const nameFg=alarm?C.ERROR:(stale?C.DIM:C.TEXT);
+    textTrunc('TITLE',d.name,CARD_TXT_X,idCy,BULB_NAME_W,nameFg,`row ${i} name`);
 
     for(let b=0;b<btnCount(d);b++){
-      const r=btnRect(i,b), isSw=(d.kind==='light'&&b>=4);
+      const r=btnRect(i,b), isSw=(d.kind==='light'&&b>=4), isAc=(d.kind==='climate');
       const dis=!d.avail||(isSw&&!d.ct);
       // Slot 0 is OFF on both card kinds and takes the neutral highlight, not
-      // the accent. Mirrors drawDeviceCard().
-      const vis=dis?'disabled':(btnActive(d,b)?(b===0?'activeOff':'active'):'inactive');
+      // the accent. A bulb's 1%/30%/100% chip (not the AC's mode chips, not a
+      // swatch) takes the yellow activeBri highlight instead — scoped to this
+      // one control on request. Mirrors drawDeviceCard().
+      const vis=dis?'disabled':
+        (btnActive(d,b)?(b===0?'activeOff':(!isAc&&!isSw?'activeBri':'active')):'inactive');
       if(d.kind==='climate'){
         if(b===AC_BTN_TUP||b===AC_BTN_TDN) wStepBtn(r,b===AC_BTN_TUP,vis);
         else if(b===AC_BTN_TEMP){
@@ -822,13 +843,13 @@ function drawSceneTile(slot,idx){
   textFit('TITLE',sc.name,null,cx,y+SCENE_NAME_DY,SCENE_TILE_W-2*SP_2,fg,`scene "${sc.name}"`);
 
   if(x+SCENE_TILE_W>SCENE_SB_X0) warn(`tile ${slot} reaches into the scroll gutter`);
-  if(y+SCENE_TILE_H>SCR_H)       warn(`tile ${slot} overflows the bottom (${y+SCENE_TILE_H}px)`);
+  if(y+SCENE_TILE_H>STATUS_Y0)   warn(`tile ${slot} overflows into the header (${y+SCENE_TILE_H}px)`);
 }
 
 function drawSceneScrollbar(){
   const maxRow=sceneMaxRow();
   if(maxRow===0) return;                       // empty gutter, dead to taps
-  const cx=SCENE_SB_X0+SCENE_SB_W/2, bot=SCR_H-1;
+  const cx=SCENE_SB_X0+SCENE_SB_W/2, bot=STATUS_Y0-1;
   icoChevron(cx,ROWS_Y0+13,true, sceneRow===0     ?C.DISABLED:C.TEXT2,6,5);
   icoChevron(cx,bot-13,   false, sceneRow>=maxRow ?C.DISABLED:C.TEXT2,6,5);
 
@@ -888,6 +909,44 @@ function drawSettings(){
   }
 }
 
+// Mirrors tabRect() in screen.cpp: each tab's cell hugs its OWN label (measured
+// via textW, not a shared width constant), with the leftover TAB_STRIP_W split
+// evenly as a margin on the two OUTER edges rather than spent as slack inside
+// every cell — see the TAB_STRIP_W comment in config.h for why a uniform cell
+// couldn't produce a tight-looking gap no matter how it was split.
+let _tabCells=null;
+function tabRect(i){
+  if(!_tabCells){
+    const w=TAB_LABEL.map(t=>textW('MICRO',t)+2*TAB_LBL_DX);
+    const total=w.reduce((a,b)=>a+b,0)+(TAB_COUNT-1)*TAB_GAP;
+    let cx=TAB_X0+Math.floor((TAB_STRIP_W-total)/2);
+    _tabCells=w.map(cw=>{ const cell={x:cx,w:cw}; cx+=cw+TAB_GAP; return cell; });
+    if(total>TAB_STRIP_W) warn(`tab labels (${total}px incl. gaps) overrun the ${TAB_STRIP_W}px strip`);
+  }
+  return _tabCells[i];
+}
+
+// Mirrors drawStatusRoom() in screen.cpp: <temp><ring> <humidity> / , left-
+// aligned from the room region's left edge, immediately before the clock.
+// dev[NUM_BULBS] is the AC (config.h: "Devices 0..2 are the bulbs, device 3
+// is the AC"), same assumption the firmware makes. Temperature and humidity
+// are TITLE now (bumped from MICRO to match the clock beside them); the "/"
+// separator stayed MICRO, being punctuation rather than data.
+function drawStatusRoom(){
+  const d=dev[NUM_BULBS], err=isErr();
+  const fg=(err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT2);
+  const room=roomTempText(d), hum=humidityText(d);
+  let x=SCR_W-STATUS_ROOM_W-STATUS_CLK_W;
+  gtext('TITLE',room.s,x,STATUS_CY,'left',fg);
+  x+=textW('TITLE',room.s);
+  if(room.deg){ disc(x+3,STATUS_CY+INK_TOP.TITLE+2,2,null,fg); x+=5; }
+  x+=SP_1;
+  if(hum){ gtext('TITLE',hum,x,STATUS_CY,'left',fg); x+=textW('TITLE',hum)+SP_1; }
+  gtext('MICRO','/',x,STATUS_CY,'left',C.TEXT3);
+  if(x+textW('MICRO','/')>SCR_W-STATUS_CLK_W)
+    warn(`header room reading runs into the clock region (ends x=${x+textW('MICRO','/')})`);
+}
+
 function draw(){
   warnings=[];
   applyTheme(set.nightMode);
@@ -895,17 +954,21 @@ function draw(){
   const shiftLadder=checkShiftDistinct();
   g.fillStyle=C.BG; g.fillRect(0,0,SCR_W,SCR_H);
 
-  // header: glyph | tabs | clock, tiling the bar exactly
+  // header: glyph | tabs | room reading | clock, tiling the bar exactly
   if(!wifiOk) icoWifi(STATUS_ICO_CX,STATUS_CY,0,C.ERROR,C.ERROR);
   else {
     icoWifi(STATUS_ICO_CX,STATUS_CY,3,C.TEXT3,C.DIVIDER);
     if(!haOk) icoBadge(STATUS_ICO_CX+6,STATUS_CY-6,C.WARNING,C.BG);
   }
   // The cell is the clear rect in drawTab(), and handing it to wTab is what puts
-  // the underline on the last row above the rule.
-  for(let i=0;i<TAB_COUNT;i++)
-    wTab(TAB_X0+i*TAB_W,0,TAB_W,STATUS_DIV_Y,
+  // the underline on the first row below the rule.
+  for(let i=0;i<TAB_COUNT;i++){
+    const cell=tabRect(i);
+    wTab(cell.x,STATUS_DIV_Y+1,cell.w,STATUS_H-1,
          TAB_LABEL[i], i===page?'active':'inactive');
+  }
+
+  drawStatusRoom();
 
   // 24h clock in Asia/Bangkok, matching the firmware's NTP + TZ_INFO="ICT-7"
   const clk=new Date().toLocaleTimeString('en-GB',
@@ -913,7 +976,7 @@ function draw(){
   gtext('TITLE',clk,SCR_W-SP_2+2,STATUS_CY,'right',C.TEXT);
   const clkW=textW('TITLE',clk), clkLeft=(SCR_W-SP_2+2)-clkW;
   if(clkLeft < SCR_W-STATUS_CLK_W)
-    warn(`clock "${clk}" (${clkW}px) starts at x=${clkLeft}, inside tab 2's cell (region starts ${SCR_W-STATUS_CLK_W})`);
+    warn(`clock "${clk}" (${clkW}px) starts at x=${clkLeft}, inside the room region (starts ${SCR_W-STATUS_CLK_W})`);
   g.fillStyle=C.DIVIDER; g.fillRect(0,STATUS_DIV_Y,SCR_W,1);
 
   if(page===PAGE_SCENES)        drawScenes();
@@ -922,22 +985,31 @@ function draw(){
 
   // ── the same static_asserts screen.cpp makes ──
   if(STATUS_ICO_W!==TAB_X0) warn('header: gap between the status glyph and the tabs');
-  if(TAB_X0+TAB_COUNT*TAB_W!==SCR_W-STATUS_CLK_W) warn('header: tabs and clock do not meet');
-  if(TAB_UL_Y+TAB_UL_H>STATUS_DIV_Y) warn('tab underline overruns the header divider');
-  if(STATUS_DIV_Y-TAB_UL_H!==TAB_UL_Y) warn('the tab cell does not seat the underline at TAB_UL_Y');
-  // Two things the compiler cannot see. The label's descenders must stop above the
-  // bar ("Settings" has a g), and the widest label plus its bleed must still fit
-  // the cell, or the bar would be clamped and stop tracking the word.
-  if(STATUS_CY+INK_BOT.BODY >= TAB_UL_Y)
-    warn(`tab label descenders reach y${STATUS_CY+INK_BOT.BODY}, underline starts y${TAB_UL_Y}`);
-  for(const t of TAB_LABEL){
-    if(textW('BODY',t)+2*TAB_UL_PAD > TAB_W)
-      warn(`tab "${t}" underline (${textW('BODY',t)+2*TAB_UL_PAD}px) is wider than its ${TAB_W}px cell`);
-    if(textW('BODY',t) > TAB_W-2*TAB_LBL_DX)
-      warn(`tab "${t}" (${textW('BODY',t)}px) exceeds its ${TAB_W-2*TAB_LBL_DX}px label budget`);
-  }
-  if(ROWS_Y0+NUM_DEVICES*ROW_H!==SCR_H)
-    warn(`rows do not fill the body (${ROWS_Y0+NUM_DEVICES*ROW_H} of ${SCR_H})`);
+  // TAB_STRIP_W is now DERIVED from STATUS_ROOM_W, STATUS_CLK_W and TAB_X0
+  // (see its const above), so "tabs and the room/clock block do not meet" can
+  // no longer go wrong — there is nothing left to assert there. tabRect()
+  // warns separately if the labels ever overrun TAB_STRIP_W (19px of margin
+  // now — see STATUS_ROOM_W's comment above for why that grew back up rather
+  // than staying as tight as TAB_GAP's own cut alone would have left it).
+  if(TAB_UL_Y<=STATUS_DIV_Y) warn('tab underline overruns the header divider');
+  if(TAB_UL_Y!==STATUS_DIV_Y+1) warn('the tab cell does not seat the underline at TAB_UL_Y');
+  // Two things the compiler cannot see. The label's ink must stop below the bar
+  // now that the bar sits ABOVE the text ("Settings" has a g, but it's the TOP
+  // of the ink that matters here), and the widest label plus its bleed must
+  // still fit the cell, or the bar would be clamped and stop tracking the word.
+  // MICRO, not BODY — the tab label's font, per wTab() above.
+  if(STATUS_CY+INK_TOP.MICRO <= TAB_UL_Y+TAB_UL_H)
+    warn(`tab label ink starts y${STATUS_CY+INK_TOP.MICRO}, underline ends y${TAB_UL_Y+TAB_UL_H}`);
+  // Cells are content-fit now (tabRect()), so a label can never overrun its
+  // OWN cell by construction — the only residual thing to check is that the
+  // underline (label + 2*TAB_UL_PAD) doesn't spill past that same cell.
+  TAB_LABEL.forEach((t,i)=>{
+    const cell=tabRect(i);
+    if(textW('MICRO',t)+2*TAB_UL_PAD > cell.w)
+      warn(`tab "${t}" underline (${textW('MICRO',t)+2*TAB_UL_PAD}px) is wider than its ${cell.w}px cell`);
+  });
+  if(ROWS_Y0+NUM_DEVICES*ROW_H!==STATUS_Y0)
+    warn(`rows do not fill the body (${ROWS_Y0+NUM_DEVICES*ROW_H} of ${STATUS_Y0})`);
   if(CARD_L1_Y+CARD_L1_H>CTL_DY) warn('card line 1 overlaps the control row');
   if(CTL_DY+CTL_H>CARD_H) warn('control row overruns the card');
   if(BULB_CTL_X0+4*BULB_CHIP_PITCH-CHIP_GAP+2*SW_CELL_W!==CARD_IN_X1+1)
@@ -966,8 +1038,28 @@ function draw(){
     warn(`bulb chip "${l}" (${textW('BODY',l)}px) exceeds its ${BULB_CHIP_W-2*SP_1}px label budget`);
   if(ACS_X0+2*ACS_BTN_W+ACS_VAL_W!==CARD_IN_X1+1)
     warn('AC control row does not fill the card');
-  if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H!==SCR_H)
-    warn(`scene grid does not fill the body (${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H} of ${SCR_H})`);
+  // AC mode chips narrowed 60->43 to make room for the identity column — check
+  // the labels still fit, same as the bulb chip check above.
+  for(const l of AC_LABEL) if(l && textW('BODY',l)>ACM_W-2*SP_1)
+    warn(`AC chip "${l}" (${textW('BODY',l)}px) exceeds its ${ACM_W-2*SP_1}px label budget`);
+  // The header's room-reading region is a reserved worst-case budget, not a
+  // tiled grid (the content is proportional and optional-humidity), so this
+  // checks the worst REALISTIC case fits rather than an exact equation — the
+  // same kind of check the AC's identity column used to need before the
+  // reading moved here. "99%", not "100%": an indoor AC'd bedroom sensor
+  // doesn't read 100% relative humidity, so budgeting for it was the same
+  // error the temperature side (2 digits, not ha.cpp's full -10..60 sanity
+  // band) already knew to avoid. drawStatusRoom() above builds the same
+  // string in TITLE (not MICRO, since the temperature/humidity were bumped a
+  // size); this mirrors it with the worst-case inputs rather than whatever
+  // the current dev[3] shows.
+  {
+    const roomW=textW('TITLE','27')+5+SP_1+textW('TITLE','99%')+SP_1+textW('MICRO','/');
+    if(roomW>STATUS_ROOM_W)
+      warn(`header room reading worst case (${roomW}px) exceeds its ${STATUS_ROOM_W}px budget`);
+  }
+  if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H!==STATUS_Y0)
+    warn(`scene grid does not fill the body (${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H} of ${STATUS_Y0})`);
   if(SCENE_X0+(SCENE_COLS-1)*SCENE_PITCH_X+SCENE_TILE_W>SCENE_SB_X0)
     warn('scene grid overlaps the scroll gutter');
   // Descenders on a STACKED card (the AC, and Settings) must stop before its
@@ -987,10 +1079,11 @@ function draw(){
 
   let out=`<span class="hd">page</span> ${TAB_LABEL[page]}   `+
           `<span class="hd">body</span> ${ROWS_Y0}..${ROWS_Y0+NUM_DEVICES*ROW_H-1}\n`;
-  out+=`header  glyph 0..${STATUS_ICO_W-1} | tabs ${TAB_X0}..${TAB_X0+TAB_COUNT*TAB_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
+  const tabCellsStr=TAB_LABEL.map((t,i)=>{const c=tabRect(i);return `${t}:${c.x}..${c.x+c.w-1}`;}).join(' ');
+  out+=`header  y ${STATUS_Y0}..${SCR_H-1} | glyph x 0..${STATUS_ICO_W-1} | tabs ${TAB_X0}..${TAB_X0+TAB_STRIP_W-1} [${tabCellsStr}] (${TAB_GAP}px gaps) | room ${SCR_W-STATUS_ROOM_W-STATUS_CLK_W}..${SCR_W-STATUS_CLK_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
   out+=`card    x ${CARD_X}..${CARD_X+CARD_W-1}, content ${CARD_IN_X0}..${CARD_IN_X1} (${CARD_IN_W}px)\n`;
   out+=`bulb    id ${CARD_IN_X0}..${BULB_CTL_X0-1} (name ${BULB_NAME_W}px) | chips ${BULB_CTL_X0}..${SW_X0-1} (${BULB_CHIP_W}x${BULB_CTL_H}) | swatches ${SW_X0}..${SW_X0+2*SW_CELL_W-1}\n`;
-  out+=`ac      chips ${CARD_IN_X0}..${ACS_X0-1} | stepper ${ACS_X0}..${ACS_X0+2*ACS_BTN_W+ACS_VAL_W-1}\n`;
+  out+=`ac      id ${CARD_IN_X0}..${BULB_CTL_X0-1} | chips ${BULB_CTL_X0}..${ACS_X0-1} | stepper ${ACS_X0}..${ACS_X0+2*ACS_BTN_W+ACS_VAL_W-1}\n`;
   out+=`scenes  ${SCENE.length} in ${sceneRowsN()} rows, showing ${sceneRow}..${sceneRow+SCENE_VIS_ROWS-1} of 0..${sceneMaxRow()}\n`;
   out+=`        grid x ${SCENE_X0}..${sceneTileX(SCENE_COLS-1)+SCENE_TILE_W-1} | gutter ${SCENE_SB_X0}..${SCR_W-1} | y ${ROWS_Y0}..${sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H-1}\n`;
   out+=`night   ${ladder}\n`;
@@ -1009,10 +1102,15 @@ cv.addEventListener('click',e=>{
   // Mirrors handleTouch(): the 180 flip is applied to the TAP, not the panel.
   if(set.flip){ px=SCR_W-1-px; py=SCR_H-1-py; }
 
-  // Tabs are the only live region above ROWS_Y0.
-  if(py<ROWS_Y0){
-    if(py<TAB_TAP_H && px>=TAB_X0 && px<TAB_X0+TAB_COUNT*TAB_W){
-      page=Math.floor((px-TAB_X0)/TAB_W); draw();
+  // Tabs are the only live region at/below STATUS_Y0, now that the header sits
+  // at the bottom of the screen.
+  if(py>=STATUS_Y0){
+    // Mirrors screenHitTest(): cells are content-fit and unevenly spaced
+    // (tabRect()), so a tap in TAB_GAP or either outer margin is a genuine
+    // miss rather than snapping to a neighbour.
+    for(let i=0;i<TAB_COUNT;i++){
+      const cell=tabRect(i);
+      if(px>=cell.x && px<cell.x+cell.w){ page=i; draw(); break; }
     }
     return;
   }

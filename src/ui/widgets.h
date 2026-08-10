@@ -15,6 +15,7 @@
 //   BV_PRESSED   held (a PRESS_FLASH_MS tactility flash, not a state)
 //   BV_DISABLED  unavailable: there is no state to show, so none is implied
 //   BV_ERR       last command on this surface failed
+//   BV_ACTIVE_BRI  selected, and it's a bulb's 1%/30%/100% chip — see ctlColour
 //
 // BV_INACTIVE is 0 so a memset of a snapshot means "inactive" — which is why
 // every snapshot also carries a `valid` flag, or a cleared one would read as
@@ -24,7 +25,8 @@
 // and compared against next frame's, so renumbering them is fine within a build
 // but the ordinal is what a dirty-region compare sees.
 enum BtnVis : uint8_t {
-  BV_INACTIVE = 0, BV_ACTIVE, BV_PRESSED, BV_DISABLED, BV_ERR, BV_ACTIVE_OFF
+  BV_INACTIVE = 0, BV_ACTIVE, BV_PRESSED, BV_DISABLED, BV_ERR, BV_ACTIVE_OFF,
+  BV_ACTIVE_BRI
 };
 
 // The state -> colour table, in ONE place. Ask for it rather than branching on
@@ -43,6 +45,13 @@ enum BtnVis : uint8_t {
 // not a colour the caller passes in, so the rule stays in this table: every
 // "selected" control in the UI is a solid fill with dark text, and only WHICH
 // fill depends on what was selected.
+//
+// ACTIVE_BRI is the same treatment again in C_BRI yellow, scoped to exactly
+// one control: a bulb card's 1%/30%/100% chip, on request — everything else
+// that selects (AC mode chips, tabs, Settings chips, night-mode picker, a
+// swatch's accent halo) stays on ACCENT. A second saturated colour loose in
+// the whole UI would undo the "ACCENT is the only one" rule; confined to one
+// control on one card kind, it doesn't.
 struct CtlColour { uint16_t fill, edge, fg; };
 CtlColour ctlColour(uint8_t vis);
 
@@ -79,8 +88,10 @@ void wValue(int16_t x, int16_t y, int16_t w, int16_t h, const char* val,
             bool degree, uint16_t fg, uint16_t bg);
 
 // A navigation tab: a label, and under the selected one a 2px underline flush
-// with the BOTTOM of the rect you pass. Seating the bar on the header rule is
-// therefore the caller's choice of rect, not a constant baked in here.
+// with the TOP of the rect you pass. Seating the bar on the header rule is
+// therefore the caller's choice of rect, not a constant baked in here — the
+// header sits at the bottom of the screen, so the rule (and the bar that seats
+// on it) is at the top of the band, not the bottom.
 //
 // It is an underline and not a pill because a filled pill made the header read
 // as a fourth row of buttons — the same solid-accent fill that means "selected"

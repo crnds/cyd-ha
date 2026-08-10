@@ -60,28 +60,31 @@
 //
 // The overrides are ordered by 5-bit red level so nothing confusable sits
 // adjacent. Structural darks are left to derive (they are near-black either
-// way); every semantic colour is pinned. Measured ladder, all 17 distinct:
+// way); every semantic colour is pinned. Measured ladder, all 18 distinct:
 //
 //   BG 0 < SURFACE 2 < DIVIDER 3 < ELEVATED 4 < BORDER 6 < DIM 7 < SUCCESS 10
 //   < DISABLED 12 < NEUTRAL 13 < WARM 14 < TEXT3 16 < ACCENT 18 < TEXT2 20
-//   < WARNING 22 < TEXT 25 < COOL 27 < ERROR 31
+//   < WARNING 22 < BRI 24 < TEXT 25 < COOL 27 < ERROR 31
 //
 // The SURFACE/DIVIDER/ELEVATED trio sits one step apart, and that is the
 // intended result rather than a crowding failure: night mode exists to emit as
 // little light as possible, so the card, its rules and the controls on it all
 // collapse toward black and the page is carried by text and ACCENT alone. What
 // must not collapse is any pair a reader has to TELL APART — and every such pair
-// (DIM/ERROR, SUCCESS/ACCENT, WARM/COOL, NEUTRAL/ELEVATED, NEUTRAL/ACCENT, the
-// text tiers) is ≥2 steps clear.
+// (DIM/ERROR, SUCCESS/ACCENT, WARM/COOL, NEUTRAL/ELEVATED, NEUTRAL/ACCENT, BRI/
+// NEUTRAL, BRI/ACCENT, BRI/WARM, BRI/COOL, the text tiers) is ≥2 steps clear.
 //
-// NEUTRAL's one-step neighbours are DISABLED and WARM, and neither is a pair:
-// the ladder ranks values, not roles, and those two never appear as the same
-// KIND of mark. NEUTRAL is only ever a chip fill; DISABLED is only ever a label
+// NEUTRAL's one-step neighbours are DISABLED and WARM, and BRI's is TEXT
+// (24 vs 25) — none of those three are a pair: the ladder ranks values, not
+// roles, and each of those two never appears as the same KIND of mark as its
+// neighbour. NEUTRAL is only ever a chip fill; DISABLED is only ever a label
 // on a SURFACE fill (a disabled chip differs from a selected one by its whole
-// fill, not by 1/31 of red), and WARM is a swatch disc. There is no free level
-// with two clear steps below ACCENT — the low half of the ladder is full — so
-// this is the trade, and it is made on role separation rather than on hoping
-// nobody looks.
+// fill, not by 1/31 of red); WARM is a swatch disc; TEXT is a label colour,
+// never a fill a selected BRI chip needs to be told apart from — its dark
+// BV_ACTIVE-style label sits ON that fill, not beside it. There is no free
+// level with two clear steps below ACCENT — the low half of the ladder is
+// full — so this is the trade, and it is made on role separation rather than
+// on hoping nobody looks.
 //
 // simulator.html asserts the ladder is collision-free, which is the only cheap
 // way to check it without standing in a dark bedroom.
@@ -154,7 +157,8 @@
   X(TH_WARNING,   RGB565(0xF5, 0xA5, 0x24), 0xB000,       0xF240)       /* degraded      */ \
   X(TH_ERROR,     RGB565(0xFF, 0x4D, 0x6A), 0xF800,       0xF901)       /* failed        */ \
   X(TH_WARM,      RGB565(0xFF, 0xB0, 0x5C), 0x7000,       0xFA81)       /* ~2202K amber  */ \
-  X(TH_COOL,      RGB565(0xA6, 0xCD, 0xFF), 0xD800,       0xA2E3)       /* ~4000K blue   */
+  X(TH_COOL,      RGB565(0xA6, 0xCD, 0xFF), 0xD800,       0xA2E3)       /* ~4000K blue   */ \
+  X(TH_BRI,       RGB565(0xFF, 0xD1, 0x00), THEME_DERIVE, 0xFC40)       /* bulb % active */
 
 #define TH_ENUM_(slot, day, night, shift) slot,
 enum ThemeSlot : uint8_t { THEME_LIST(TH_ENUM_) TH_COUNT };
@@ -185,6 +189,21 @@ extern uint16_t THEME[TH_COUNT];
 // two controls are instantly distinguishable across a dark bedroom.
 #define C_WARM     ((uint16_t)THEME[TH_WARM])
 #define C_COOL     ((uint16_t)THEME[TH_COOL])
+
+// A second saturated colour, deliberately — the one exception alongside
+// NEUTRAL to "ACCENT is the only saturated colour in a resting UI". Scoped to
+// exactly one control: a bulb card's 1%/30%/100% chip when selected, on
+// request, so it reads distinctly from the cyan used for everything else
+// selected on the same card (OFF's neutral grey, a colour-temp swatch's
+// accent halo). THEME_DERIVE is safe for its night(red) column — it lands at
+// red-level 24, >=3 clear of NEUTRAL/ACCENT/WARM/COOL, the fills it can appear
+// beside on one card — but Shift needed a hand-picked override: the blanket
+// 45/10 scaling collapses any saturated yellow onto WARM's amber (both
+// red-saturated already, and 45% compresses the one channel that could still
+// tell them apart), so BRI's shift is boosted in green instead (chan
+// (31,34,0) vs WARM's (31,20,1), ~32 luminance points and 14 green steps
+// clear) rather than derived.
+#define C_BRI      ((uint16_t)THEME[TH_BRI])
 
 // per-channel blend a -> b, t = 0..255. RGB565 has no alpha, so every "tinted"
 // or "translucent" fill in this UI is a precomputed blend against what is

@@ -29,8 +29,15 @@ extern TFT_eSPI tft;
 //   F_NUM    Font 4 (26px box)  the AC setpoint — the one number being adjusted,
 //                               and deliberately the largest thing in the body
 //   F_TITLE  Font 2 (16px box)  card titles, the clock: what a thing IS
-//   F_BODY   Font 2 (16px box)  live state, chip labels, tab labels, captions
-//   F_MICRO  Font 1 (GLCD 6x8)  last-resort fit only, never a first choice
+//   F_BODY   Font 2 (16px box)  live state, chip labels, captions
+//   F_MICRO  Font 1 (GLCD 6x8)  last-resort fit; ALSO the tab bar, on request
+//
+// F_MICRO's tab-bar use is a deliberate, scoped exception to "last-resort,
+// never a first choice" below — chosen there specifically, on request, to
+// shrink "Devices"/"Scenes"/"Settings" by one step so TAB_GAP (config.h)
+// could open a real gap between tabs without widening the header. It is
+// still the fallback for every OTHER role's textFit(); only wTab() picks it
+// as a first choice.
 //
 // TWO CONSEQUENCES OF THE BUILT-IN SET, both real constraints rather than
 // oversights:

@@ -14,6 +14,9 @@ CtlColour ctlColour(uint8_t vis) {
     // Selected, but nothing is on. Reads as selected against C_ELEVATED without
     // spending the accent on the one state that is not an accomplishment.
     case BV_ACTIVE_OFF: return { C_NEUTRAL, C_NEUTRAL, C_BG };
+    // A bulb's brightness chip, selected — yellow rather than the shared
+    // accent, scoped to this one control on request. See theme.h's C_BRI.
+    case BV_ACTIVE_BRI: return { C_BRI,     C_BRI,     C_BG };
     // Recedes INTO the page rather than greying out on top of it: there is no
     // state to show, so the control should not look like it is showing one. The
     // devices card carries no fill, so the page background is what it sinks to.
@@ -121,19 +124,26 @@ void wTab(int16_t x, int16_t y, int16_t w, int16_t h, const char* label,
   // Text tier is the first of the two selection signals: C_TEXT for the page you
   // are on, C_TEXT3 for the ones you are not. Nine night-steps apart, so the
   // strip still says where you are with the bar ignored entirely.
-  textFit(F_BODY, label, nullptr, x + w / 2, y + h / 2, w - 2 * TAB_LBL_DX,
+  //
+  // F_MICRO, not F_BODY — one step down, on request, so the label shrinks
+  // enough that TAB_GAP (config.h) can open a real gap between tabs at the
+  // same TAB_TAP_H/STATUS_H. This is the one caller that treats F_MICRO as a
+  // first choice rather than textFit()'s last-resort fallback; see gfx.h.
+  textFit(F_MICRO, label, nullptr, x + w / 2, y + h / 2, w - 2 * TAB_LBL_DX,
           sel ? C_TEXT : C_TEXT3);
   if (!sel) return;
 
-  // Measured, not budgeted: FreeSans is proportional and textFit centres on the
-  // same cx, so the bar tracks a renamed tab with no constant to update.
-  int16_t uw = textW(F_BODY, label) + 2 * TAB_UL_PAD;
+  // Measured, not budgeted: the built-in face is proportional (well, GLCD is
+  // monospace, but this still self-corrects if that ever changes) and textFit
+  // centres on the same cx, so the bar tracks a renamed tab with no constant
+  // to update.
+  int16_t uw = textW(F_MICRO, label) + 2 * TAB_UL_PAD;
   if (uw > w) uw = w;
 
   // Pressed goes full-brightness like every other control, but as a brighter BAR
   // rather than a fill — the page switch is instant and local, so this only has
   // to confirm the tap, not stand in for a pending round trip.
-  tft.fillRect(x + (w - uw) / 2, y + h - TAB_UL_H, uw, TAB_UL_H,
+  tft.fillRect(x + (w - uw) / 2, y, uw, TAB_UL_H,
                vis == BV_PRESSED ? C_TEXT : C_ACCENT);
 }
 
