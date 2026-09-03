@@ -19,9 +19,10 @@
 #define TZ_INFO            "ICT-7"
 
 // ── Cadences / retry ─────────────────────────────────────
-// One entity polled per tick, round-robin over 4 devices, so each device
-// refreshes every ~4 * HA_POLL_MS = 6s. That is the worst-case latency for a
-// change made elsewhere (phone app, automation) showing up here.
+// All four devices refresh together in one templated POST /api/template
+// (haPollAll(), src/net/ha.cpp) every HA_POLL_MS, so no device is ever more
+// than HA_POLL_MS stale. This replaced an earlier round-robin of one entity
+// per tick, which left each device up to 4x HA_POLL_MS behind.
 #define HA_POLL_MS         1500UL
 
 // Every HA call is blocking and runs inside loop(), so a timeout is also a

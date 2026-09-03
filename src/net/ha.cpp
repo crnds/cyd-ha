@@ -114,8 +114,10 @@ static void applyLight(DeviceState& d, const char* st, int bri, int kelvin) {
 }
 
 bool haPollAll() {
-  // One buffer holds the whole request body. 879-char template measured for
-  // these entity ids; 1600 leaves ample room for longer names.
+  // One buffer holds the whole request body. 958 bytes measured against this
+  // repo's own secrets.h; that number moves with entity ID length (a rename
+  // is the only thing that can change it), and 1600 leaves ample room above
+  // it for longer names on another installation.
   static char body[1600];
   int n = snprintf(body, sizeof(body),
                    "{\"template\":\"" TPL_LIGHT TPL_LIGHT TPL_LIGHT TPL_CLIMATE "\"}",

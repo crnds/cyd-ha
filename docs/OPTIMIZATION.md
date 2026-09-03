@@ -5,6 +5,12 @@
 > below are kept as written for the record — they explain *why* the code looks
 > the way it does, and several are the reasoning behind comments in the source.
 > P5 (WebSocket) is deliberately **not** done.
+>
+> **A second, structural pass followed on 2026-09-04** — dedup, a file split,
+> `main.cpp` restructuring — with **no hardware attached**, so it could only
+> be applied and verified host-side (`pio run` + `tools/host_check` +
+> headless `simulator.html`); see §6. Visual/tap/timing verification on the
+> device is still outstanding for that pass specifically.
 
 Audit date: 2026-08-05. Firmware state: flashed and working on hardware
 (`/dev/cu.usbserial-110`), touch calibrated, 18 real taps with 0 HA errors.
@@ -327,3 +333,105 @@ none is reachable from a script.
 - **`T+`/`T-`** stepping by exactly one step and clamping at 18/31.
 - **`UNAVAILABLE` rendering on real hardware.** Verified in the simulator only;
   no device has actually dropped off the Zigbee mesh during testing.
+
+---
+
+## 6. Structural refactor (branch `refactor-structure`)
+
+Date: 2026-09-04. A second pass, deliberately separate from §1–5: this repo's
+resource headroom was never the constraint (see the top of this doc), and the
+large latency wins were already taken by §5's P1. What §5 never touched was
+structure — `screen.cpp` was 1652 lines with a 170-line `drawDeviceCard()`,
+`main.cpp` had a 129-line `handleTouch()` and a 105-line `doAction()` carrying
+three switches over one enum, and `src/net/ha.cpp` still dragged in
+ArduinoJson for a code path with no callers. This pass targets structure and
+duplication, not size or the network path — explicitly **not** the one
+remaining large lever (non-blocking HTTP), which is a behaviour change and
+stays a follow-up.
+
+**No CYD was attached for this pass** (`/dev/cu.usbserial-*` did not exist),
+unlike §5's audit. That is why `tools/host_check/` (see its own README) was
+built first: it is the only regression net available for the C++
+dirty-region/derivation logic without hardware, since `simulator.html`
+mirrors geometry constants rather than that logic. Everything below was
+verified through `pio run` (both envs, every `static_assert`), that harness
+(`--diff` against a golden captured before touching `screen.cpp`), and a
+headless `simulator.html` render — never on the device itself. Visual
+pixel-identity, tap accuracy, and the press-flash/night-mode timing paths are
+therefore still hardware-only and unverified, exactly as this section's
+predecessor once was.
+
+### Applied
+
+| Item | Result |
+|---|---|
+| Dead single-entity poll path | `haPollDevice()`/`parseLight()`/`parseClimate()` had no callers anywhere in `src/`; deleted along with the `ArduinoJson` dependency (`platformio.ini`). `DeviceState::supportsCT` is now documented as permanently `true` in the shipped firmware, since its only writer was the deleted path |
+| Raw-input pre-filter | `CardFingerprint`/`RoomFingerprint` (`screen_int.h`) let `drawDeviceCard()`/`drawStatusRoom()` return before deriving anything when nothing changed, not just before drawing. See `CLAUDE.md`'s "Rendering" section for the full mechanism and the NaN/`memcmp` caution |
+| Dedup in `screen.cpp` | `staleErr()`/`alarmFg()`/`clearHeaderRegion()` helpers, `briRect`/`nightRect` collapsed into one `settingChipRect(row, i, ...)`, `btnRect`/`settingChipRect` return a `Rect{x,y,w,h}` instead of four out-params, 7 label tables made `const char* const` |
+| File split | `screen.cpp` → `screen.cpp` (core) + `screen_devices.cpp` + `screen_scenes.cpp` + `screen_settings.cpp` + `screen_int.h`. See `CLAUDE.md`'s "Rendering" section for the file-ownership table |
+| `main.cpp` structure | `doAction()`'s button-decode extracted to `decodeAction()` (not table-driven — real per-button side effects); `handleTouch()` split into `sampleTouch()`/`dispatchHit()`; one `getLocalTime()` per `loop()` pass via a shared `hhmm` parameter and a new `screenSetClock()` setter; `doSetting()`'s two toggle rows (not all four — the other two are index-setters, a different shape) collapsed into `toggleSetting()` |
+| Stale comments | `config.h`'s `HA_POLL_MS` comment still described the pre-P1 round-robin poll; `ha.cpp`'s request-size comment was measured against different entity IDs (879 vs the current 958, computed from this repo's own `secrets.h`); `main.cpp`'s scene-rollback stack comment said ~204 B, actual `sizeof(DeviceState)` on this target is 72 B (measured via the real `xtensa-esp32-elf-g++`) so 216 B; `CLAUDE.md` stated `HTTP_READ_SVC_MS` as 2500 in two places where `config.h` has held 1500 (with its own explanatory comment) since before this pass — the reasoning for the reversion was undocumented in `CLAUDE.md` until now |
+
+### Measured after the change
+
+- **Host harness: byte-for-byte match** against the pre-refactor golden after
+  every step (`tools/host_check/build.sh --diff`), including an
+  exhaustive 320×240×3-page `screenHitTest()` sweep (hashed) and
+  draw-call-delta checks proving unchanged inputs draw nothing and a changed
+  field draws something — added a press-flash cycle to that coverage
+  specifically before touching `drawDeviceCard()`'s own `pressedNow()` call,
+  since no prior sweep had ever exercised `S.pressKind != HIT_NONE`.
+- **Flash, step by step:** baseline 1,001,517 B → ArduinoJson removal
+  1,000,565 B → pre-filter 1,000,825 B → dedup 1,000,785 B → file split
+  1,001,521 B → `main.cpp` restructure 1,001,529 B. **Net: +12 B** across the
+  whole pass — the file split's ~736 B inlining loss came out almost exactly
+  offset by dead-code removal and dedup elsewhere. RAM: 50,056 → 50,208 B
+  (+152 B, the two fingerprint structs; unchanged since).
+- **`pio run` clean on both envs at every step**, no new compiler warnings
+  beyond the pre-existing `TOUCH_CS` notice from `TFT_eSPI.h` (expected — see
+  this repo's touch-path notes).
+- **`simulator.html` re-checked headlessly** (Chromium `--headless=new`,
+  screenshotted) after every step that could plausibly affect it; unaffected,
+  since no step here changed `config.h`'s LAYOUT block or `simulator.html`
+  itself except mirroring the new `ERR_FLASH_MS` constant.
+
+### Deliberately not done
+
+- **Non-blocking HTTP.** The actual dominant responsiveness cost — up to
+  ~2.7 s frozen per poll, ~5.4 s for a two-call scene — is the blocking HTTP
+  calls inside `loop()`, not per-frame CPU. Fixing that is a behaviour
+  change and was out of scope for a "zero behaviour change" pass; it remains
+  the largest real lever and belongs to a future pass, not this one.
+- **Deadline-based `loop()` pacing** instead of the unconditional `delay(20)`.
+  Changes frame timing, so out of scope under the same constraint.
+- **A table-driven `doAction()`/`doSetting()`.** Both were examined and
+  rejected: `doAction()`'s AC-stepper branch carries real side effects
+  (`errMs` stamps, distinct log lines, the `fabsf` at-limit check) a table
+  would need an escape hatch per row for, and `doSetting()`'s four rows are
+  two genuinely different shapes (index-setters vs plain toggles), not four
+  uniform arms — see `main.cpp`'s comments at each site for the specific
+  reasoning.
+- **Narrowing `int pct`/`kelvin`/`humidity` to `int16_t`.** Saves ~24 B of a
+  72 B struct and risks signedness bugs at every comparison site — not worth
+  it under a resource budget that was never tight.
+
+### Still unverified
+
+All of these need the device physically on the desk, which it was not for
+this entire pass.
+
+- **Visual pixel-identity.** The host harness proves the C++ logic is
+  unchanged; it does not draw a single pixel. `simulator.html`'s headless
+  render is geometry-accurate but font-approximate for anything the harness
+  doesn't already cover structurally.
+- **Tap accuracy** after the `btnRect`/`settingChipRect` signature change and
+  the file split moving `screenHitTest()`'s callees across TU boundaries.
+  `tools/host_check`'s exhaustive hit-test sweep proves the *mapping* is
+  byte-identical; it says nothing about the physical touch path, which this
+  pass did not touch at all (`readTouch()`/`xptWrite()`/`xptRead()` are
+  untouched — confirmed by `git diff` producing nothing in that region for
+  every commit in this pass).
+- **Press-flash and night-mode timing** on the real 20 Hz touch-poll /
+  20 ms render cadence. The harness controls a simulated `millis()`
+  precisely, which proves the *logic* is unchanged but cannot stand in for
+  real timing jitter, a real finger, or a real PENIRQ line.

@@ -940,13 +940,25 @@ exist to prevent.
 
 | Operation | Cost | Notes |
 |---|---|---|
-| Steady-state render | a handful of compares | Every region returns early unless a *value* changed |
+| Steady-state render | a handful of compares | Every region returns early unless a *value* changed — see below |
 | One bulb chip repaint | `fillRect` 43×40 + label | ~1.7k px |
 | Bulb identity repaint | `fillRect` 44×40 + icon + 1 string | ~1.8k px |
 | AC line 1 repaint | `fillRect` 288×19 + icon + 2 strings | ~5.5k px |
 | Page switch | body wipe 320×208 + 4 cards or 9 tiles | The heaviest operation, and only on a tap |
 | Scene scroll | 9 tile repaints, **no body wipe** | Tile rects are fixed, so the gaps never change content |
 | Palette / rotation change | full `fillScreen` + invalidate | Neither alters a compared value, so both must force it |
+
+**"Returns early unless a value changed" is enforced by a raw-input
+pre-filter, not just the per-region compares.** `drawDeviceCard()` and
+`drawStatusRoom()` used to do real work — `iconVis()`/`bulbHue()`'s colour
+maths, `tempText()`/`roomTempText()`/`humidityText()`'s `snprintf`s — *before*
+the compare that decides whether to draw, so the early-out only ever saved
+the draw call, not the derivation. `CardFingerprint`/`RoomFingerprint`
+(`src/ui/screen_int.h`) capture every raw field each function reads and
+`memcmp` it against last pass first; bit-identical means the whole function
+returns before deriving anything. The per-region/per-button compares are
+still the authority on what actually repaints — the pre-filter only ever
+skips work they would also have skipped.
 
 **Deliberately absent, and why:** shadows, gradients, glassmorphism and any
 alpha-composited effect. RGB565 has no alpha, so each would be a second
@@ -956,7 +968,12 @@ filling its own rect.
 
 **Measured on the device after this redesign:** RAM 50,128 B (15.3%), flash
 1,010,489 B (32.1%), of which the three font faces are 7.85 KB. Heap free 239,604 B
-with a 235,188 B minimum, flat across a reboot and sustained running.
+with a 235,188 B minimum, flat across a reboot and sustained running. These
+predate the structural refactor tracked in `docs/OPTIMIZATION.md` (dead-code
+removal, the pre-filter above, the file split, `main.cpp` restructuring) —
+`pio run`'s own RAM/flash report moved only slightly across that whole
+refactor (see that doc's outcome section for the exact deltas), but heap
+free/minimum and a real reboot are still hardware-only and unverified since.
 
 ---
 
@@ -988,8 +1005,8 @@ slider, the scroll thumb, the splash pips), sliders, toggles, badges, notificati
 
 **Do:**
 
-- **Add a scene** — one line in `SCENE[]` in `screen.cpp`. Nothing else. No count
-  to update, no snapshot to resize.
+- **Add a scene** — one line in `SCENE[]` in `screen_scenes.cpp`. Nothing else.
+  No count to update, no snapshot to resize.
 - **Retune a colour** — one row of `THEME_LIST`. Then check the night ladder in
   `simulator.html`; if the new value collides, pin an override in the third column.
 - **Add a control** — reach for an existing widget. If you need a new one, put it

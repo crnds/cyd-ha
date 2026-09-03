@@ -452,12 +452,19 @@ timeout. A single 4000 ms timeout on both phases once froze the screen for up to
 
 **Polls and service calls are different workloads — don't unify their timeouts.**
 `HTTP_READ_MS` 1500 covers a poll (a local template render, measured 14 ms).
-Service calls get `HTTP_READ_SVC_MS` 2500, because `climate.*` goes out to the
-Sensibo **cloud**: measured **1135–1643 ms** for a real change. The trap is that a
-*no-op* write short-circuits in 24 ms, so benchmarking `set_temperature` with the
-value it already has reports 24 ms and hides the problem entirely. That mistake
-shipped a 1500 ms read timeout, and every genuine `T+`/`T-` tap then reported a
-read timeout.
+`climate.*` goes out to the Sensibo **cloud**: measured **1135–1643 ms** for a
+real change. The trap is that a *no-op* write short-circuits in 24 ms, so
+benchmarking `set_temperature` with the value it already has reports 24 ms and
+hides the problem entirely. That mistake shipped a 1500 ms `HTTP_READ_SVC_MS`,
+and every genuine `T+`/`T-` tap then reported a read timeout — which argued for
+raising it to 2500, comfortably above the measured 1135–1643 ms range.
+
+**`HTTP_READ_SVC_MS` is 1500 anyway, not 2500** — deliberately reverted once
+the next fact below made the trade worth re-examining: a read timeout there
+is not a failure, so the extra 1000 ms of 2500 bought only a cleaner log line
+at the cost of a longer frozen screen. Still comfortably above the measured
+1135–1643 ms real-change range, so a genuine climate call still reads back
+clean far more often than it times out.
 
 **A read timeout is not a failed command.** `haPostService()` treats
 `HTTPC_ERROR_READ_TIMEOUT` as *delivered* and returns true. We connected and sent
@@ -481,7 +488,7 @@ On tap it (1) applies the expected state locally and calls `screenRender()`,
 back from a saved copy** and sets `errMs`. IKEA Zigbee round-trips run 1–2s;
 without step 1 every tap feels ignored. Preserve this ordering.
 
-**Scenes** (`SCENE[]` in `screen.cpp`, `doScene()` in `main.cpp`) act on the
+**Scenes** (`SCENE[]` in `src/ui/screen_scenes.cpp`, `doScene()` in `main.cpp`) act on the
 three bulbs only — the AC runs on a different comfort schedule, and folding it
 in would make every scene tap a Sensibo *cloud* round trip.
 
@@ -496,7 +503,7 @@ in would make every scene tap a Sensibo *cloud* round trip.
   cards reads as a bug.
 - **A scene is 1–2 HTTP calls, not 6.** `light.turn_on` accepts a *list* of
   `entity_id`, and brightness + colour temp go in one call. Three separate calls
-  would be three sequential `HTTP_READ_SVC_MS` budgets (7.5 s of frozen `loop()`)
+  would be three sequential `HTTP_READ_SVC_MS` budgets (4.5 s of frozen `loop()`)
   and the bulbs would visibly step on one at a time. The call plan comes from
   `scenePlan()`, derived from the table rather than special-cased per scene — but
   it assumes every scene's ON set is **homogeneous**, which is what lets it
@@ -548,6 +555,77 @@ adding a scene is one line and nothing else. There is deliberately **no
   still scales to 100+. This is also why the gaps differ per axis (12 across, 8
   down): the vertical budget is fixed at 208px, and `2*PITCH_Y + TILE_H == 208` has
   exactly one solution that keeps tiles above 60px.
+
+**The UI layer is four translation units now, not one.** `src/ui/screen.cpp`
+used to hold all three pages plus lifecycle/hit-test/splash in a single
+1732-line file, which meant every page's draw function inlined into one
+`screenRender()` symbol regardless of what actually changed. It split along
+page boundaries:
+
+| file | owns | not shared with |
+|---|---|---|
+| `src/ui/screen.cpp` | lifecycle (`screenBegin`/`screenRender`/`screenInvalidate`/`screenSetFlip`/`screenSetNightMode`/`screenSetClock`), the header/tab strip, the connectivity overlay, `screenHitTest()`, splash, calibration | — |
+| `src/ui/screen_devices.cpp` | the Devices page (4 cards, 23 controls): `btnActive`, `iconVis`/`bulbHue`, `drawDeviceCard` | — |
+| `src/ui/screen_scenes.cpp` | the Scenes page, including `SCENE[]` itself | `SCENE[]`'s storage — `sceneCount()`/`sceneMaxRow()` (`screen.h`) are the only way another file learns the count or the scroll range |
+| `src/ui/screen_settings.cpp` | the Settings page | — |
+| `src/ui/screen_int.h` | shared types (`Rect`, `CardFingerprint`/`RowSnap`, `SceneSnap`, `SettingSnap`), the three page snapshots as `extern` (defined without `static` in the .cpp that owns each, so `screen.cpp`'s `screenInvalidate()`/`bodyReset()` can still `memset()` them across the TU boundary), and small `static inline` predicates (`pressedNow`/`staleErr`/`alarmFg`/`noConnShown`/`pctMatches`/`kelvinMatches`/`rowTop`/`cardTop`) | not the public API — `screen.h` is |
+
+Each page's own geometry function (`btnRect`/`settingChipRect`/`sceneTileX,Y`)
+is defined in that page's `.cpp` (no longer `static`) and declared in
+`screen_int.h`, since `screen.cpp`'s hit-test and calibration-verify screen
+call across the boundary into all three — that is the one thing every page
+used to keep fully private and now has to expose. `tabRect()` stayed fully
+private to `screen.cpp`, since only cross-page code (the header) ever needed
+it. The cost of the split is real and was accepted deliberately: without
+LTO (see `platformio.ini` below), a call across a TU boundary can no longer
+be inlined the way a same-file call could, so flash grew ~736 B for the split
+alone. RAM is unchanged — the same total storage, just declared `extern`
+instead of `static` in a different file. Measured end to end, this and the
+two changes below (the pre-filter, ~260 B; the shared clock reading,
+negligible) came out flat against dead-code removal earlier in the same
+refactor: **+12 B total** — see `docs/OPTIMIZATION.md` for the step-by-step
+numbers.
+
+**`drawDeviceCard()`/`drawStatusRoom()` have a raw-input pre-filter ahead of
+their per-region compares**, so "returns early unless a value changed" (see
+Performance budget in `DESIGN.md`) is true of the whole function, not just
+the drawing. `CardFingerprint`/`RoomFingerprint` (`screen_int.h`) capture
+every raw field the function reads — `on`/`avail`/`known`/`supportsCT`/`pct`/
+`kelvin`/`target`/`mode` plus the time-derived `stale`/`err`/`alarm`/`press`
+— and `memcmp` the whole struct (zero-inited first, so padding can't cause a
+false mismatch) against last pass. Bit-identical means the function returns
+before doing any of `iconVis()`/`bulbHue()`'s colour maths or `tempText()`'s
+formatting; the per-region/per-button compares are untouched and remain the
+authority on what actually repaints. Floats are compared by BIT PATTERN via
+that `memcmp`, never by `==` — `d.target`/`d.room` can be `NaN`, and
+`NaN != NaN` would silently defeat the early-out exactly when a value is
+genuinely unknown, which is the one case this exists to handle correctly.
+**`ERR_FLASH_MS`** (`config.h`, 1500) replaced a bare `1500` duplicated at
+three sites in `screen.cpp` and mirrored by hand in `simulator.html`.
+
+**`loop()` reads the wall clock once per pass, not up to four times.**
+`serviceNightSchedule()`/`serviceDailyRestart()` (`main.cpp`) take the shared
+`hhmm` (hour×60+min, `-1` = NTP unsynced) as a parameter instead of each
+calling `getLocalTime()` independently, and `screen.cpp`'s header clock gets
+it through `screenSetClock()` (`screen.h`) — same "memoised, safe to call
+every pass" contract as `screenSetNightMode`/`screenSetFlip`, for the same
+layering reason: `tft`'s state stays file-static in `screen.cpp`, so
+`main.cpp` reaches the header through a setter rather than touching it
+directly. This matters because `screenRender()` itself runs up to 4 times in
+one `loop()` pass — `doAction()`/`doScene()`/`doSetting()`'s immediate
+optimistic repaint, plus `loop()`'s own — and the wall clock cannot have
+changed within a pass. The two schedulers' separate edge trackers
+(`lastMin`) are unrelated and untouched — only the redundant syscall was
+removed, not the intentionally duplicated boundary logic.
+
+**A host-compiled equivalence harness exists for this reason: none of the
+above could be verified on hardware.** `tools/host_check/` `#include`s the
+relevant `.cpp`(s) directly (their target functions are `static`) against
+stub `Arduino.h`/`TFT_eSPI.h` headers and diffs stdout against a captured
+golden — see `tools/host_check/README.md`. It is not a substitute for
+`simulator.html`'s visual fidelity or an eventual hardware pass; it exists
+specifically to catch a logic regression in the dirty-region/derivation code
+that neither of those two checks reaches.
 
 **Rendering** (`src/ui/screen.cpp`) is **dirty-region based**. `screenRender()`
 runs every loop pass, dispatches on `S.page`, and repaints only what changed:

@@ -471,7 +471,8 @@ static void doScene(int16_t idx) {
   }
 
   // doAction() saves ONE `before`; a scene mutates three, and a partial failure
-  // must restore the exact pre-tap state of every bulb. ~204 B of loop stack.
+  // must restore the exact pre-tap state of every bulb. sizeof(DeviceState)
+  // is 72 B on this target (measured), so 216 B of loop stack.
   DeviceState before[NUM_BULBS];
   for (uint8_t i = 0; i < NUM_BULBS; i++) before[i] = S.dev[i];
 

@@ -82,7 +82,7 @@ legible tiles beat twelve cramped ones, and the page still scales past a hundred
 
 The arrows and thumb only appear once the scene table outgrows one screen, so with
 five scenes the gutter is a plain margin and ignores taps. Adding a scene is one
-line in `SCENE[]` in `src/ui/screen.cpp` — there is no count to update anywhere
+line in `SCENE[]` in `src/ui/screen_scenes.cpp` — there is no count to update anywhere
 else, and the renderer's memory does not grow with the list.
 
 A scene highlights when the bulbs *actually match* it, rather than when you last
