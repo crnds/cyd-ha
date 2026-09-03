@@ -42,6 +42,15 @@ const char* sceneName(uint16_t idx);
 // index must ask rather than assume.
 uint16_t sceneCount();
 
+// The largest scroll offset that still fills the screen (0 while every scene
+// fits on one page, which is what makes the whole scroll affordance compile
+// out — see SCENE_MAX_ROW's own comment). Exists so screenHitTest()'s scroll-
+// gutter dead-region check can ask this rather than needing SCENE_MAX_ROW
+// itself, which stays private to the file that owns SCENE[] — the table
+// staying the only place the count lives is the same invariant sceneCount()
+// exists for.
+uint16_t sceneMaxRow();
+
 // Moves the Scenes grid by `rows` (negative = up), clamped to the list. Returns
 // true only when the offset actually changed; the renderer notices the new
 // offset by itself, so a caller needs nothing but the tap.

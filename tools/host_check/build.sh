@@ -13,11 +13,17 @@ mkdir -p "$OUT"
 CXX=${CXX:-g++}
 CXXFLAGS="-std=c++17 -O0 -g -Wall -Wextra -Wno-unused-parameter -I stub -I $ROOT/src/ui -I $ROOT/include"
 
-$CXX $CXXFLAGS -c "$ROOT/src/ui/theme.cpp"   -o "$OUT/theme.o"
-$CXX $CXXFLAGS -c "$ROOT/src/ui/gfx.cpp"     -o "$OUT/gfx.o"
-$CXX $CXXFLAGS -c "$ROOT/src/ui/icons.cpp"   -o "$OUT/icons.o"
-$CXX $CXXFLAGS -c "$ROOT/src/ui/widgets.cpp" -o "$OUT/widgets.o"
-$CXX $CXXFLAGS -c driver.cpp                 -o "$OUT/driver.o"
+$CXX $CXXFLAGS -c "$ROOT/src/ui/theme.cpp"          -o "$OUT/theme.o"
+$CXX $CXXFLAGS -c "$ROOT/src/ui/gfx.cpp"            -o "$OUT/gfx.o"
+$CXX $CXXFLAGS -c "$ROOT/src/ui/icons.cpp"          -o "$OUT/icons.o"
+$CXX $CXXFLAGS -c "$ROOT/src/ui/widgets.cpp"        -o "$OUT/widgets.o"
+$CXX $CXXFLAGS -c "$ROOT/src/ui/screen_scenes.cpp"   -o "$OUT/screen_scenes.o"
+$CXX $CXXFLAGS -c "$ROOT/src/ui/screen_settings.cpp" -o "$OUT/screen_settings.o"
+# driver.cpp #includes screen.cpp and screen_devices.cpp directly (see its
+# own comment for why) — do NOT also compile those two here, or their
+# externally-linked symbols (drawDeviceCard, RowSnap snap[], ...) get defined
+# twice and the link fails.
+$CXX $CXXFLAGS -c driver.cpp                        -o "$OUT/driver.o"
 $CXX "$OUT"/*.o -o "$OUT/host_check"
 
 case "$1" in

@@ -1,0 +1,293 @@
+#include "screen_int.h"
+#include <string.h>
+
+// The Scenes page: macros over the three bulbs, in a scrolling 3-column grid
+// of 88x64 tiles. See screen_int.h for the cross-file contract, and
+// CLAUDE.md's "Scenes" / "The scene grid is built to scale" sections for the
+// design rationale.
+
+// Macros over the three bulbs. The AC is deliberately untouched: it runs on a
+// different comfort schedule than the lighting, and folding it in would make
+// every scene tap a Sensibo cloud round trip.
+//
+// THIS TABLE IS THE ONLY DECLARATION OF HOW MANY SCENES THERE ARE. It is
+// unsized on purpose and SCENE_N below is derived from it, so adding a scene is
+// one line here and nothing else — no count in config.h to forget, and no
+// snapshot to resize (the renderer's snapshot is per visible TILE, not per
+// scene). That is what makes the page scale to a list far longer than the
+// screen. Kept private to this file — sceneCount()/sceneMaxRow() (screen.h)
+// are the only way another file learns how many there are or how far the grid
+// scrolls, so the table stays the single source of truth for both.
+struct SceneBulb { bool on; int16_t pct; int16_t kelvin; };
+struct Scene { const char* name; SceneBulb b[NUM_BULBS]; };
+
+#define SB_OFF   {false, 0, 0}
+#define SB_MIDW  {true, BRI_MID,  KELVIN_WARM}
+#define SB_HIW   {true, BRI_HIGH, KELVIN_WARM}
+#define SB_HIC   {true, BRI_HIGH, KELVIN_COOL}
+
+static const Scene SCENE[] = {
+  {"OFF",   {SB_OFF,  SB_OFF,  SB_OFF }},
+  {"RELAX", {SB_OFF,  SB_OFF,  SB_MIDW}},
+  {"WORK",  {SB_MIDW, SB_MIDW, SB_MIDW}},
+  {"AWAKE", {SB_HIW,  SB_HIW,  SB_HIW }},
+  {"DAY",   {SB_HIC,  SB_HIC,  SB_HIC }},
+};
+
+static constexpr uint16_t SCENE_N = sizeof(SCENE) / sizeof(SCENE[0]);
+// Grid rows the table needs, and the largest scroll offset that still fills the
+// screen. SCENE_MAX_ROW is 0 today, which is what makes the whole scroll
+// affordance compile out and the page look exactly like a fixed one.
+static constexpr uint16_t SCENE_ROWS_N = (SCENE_N + SCENE_COLS - 1) / SCENE_COLS;
+static constexpr uint16_t SCENE_MAX_ROW =
+    SCENE_ROWS_N > SCENE_VIS_ROWS ? (uint16_t)(SCENE_ROWS_N - SCENE_VIS_ROWS) : 0;
+
+SceneSnap sceneSnap;
+
+// Take an on-screen SLOT (0..SCENE_PER_PAGE-1), not a scene index — which scene
+// a slot shows depends on S.sceneRow.
+int16_t sceneTileX(uint8_t slot) {
+  return SCENE_X0 + (slot % SCENE_COLS) * SCENE_PITCH_X;
+}
+int16_t sceneTileY(uint8_t slot) {
+  return ROWS_Y0 + (slot / SCENE_COLS) * SCENE_PITCH_Y;
+}
+
+// A scene is ACTIVE when the LIVE state of all three bulbs matches its
+// definition. Derived every render, never latched — that is exactly what makes
+// overriding one bulb on the Devices page deselect the scene, and what makes a
+// change from the HA app select the matching one, with no "current scene"
+// variable to fall out of sync.
+bool sceneActive(uint16_t idx) {
+  if (idx >= SCENE_N) return false;
+  const Scene& sc = SCENE[idx];
+
+  for (uint8_t i = 0; i < NUM_BULBS; i++) {
+    const DeviceState& d = S.dev[i];
+    const SceneBulb&   w = sc.b[i];
+
+    // Same rule as btnActive(): with no current state there is nothing to
+    // highlight, and a lit tile would claim the room is in a state we cannot
+    // actually see.
+    if (!d.known || !d.avail) return false;
+
+    if (!w.on) { if (d.on) return false; continue; }   // want off
+    if (!d.on) return false;                           // want on, is off
+
+    // pct/kelvin only mean anything on a bulb that is ON — an off bulb keeps
+    // its last known level rather than blanking it (the fail-soft rule), so
+    // these would compare stale values. The two guards above make that
+    // unreachable, which is why they must stay above this and not below.
+    if (d.pct < 0 || !pctMatches(w.pct, d.pct)) return false;
+
+    if (w.kelvin > 0 && d.supportsCT) {
+      // An unknown kelvin is "cannot confirm", not "match". Treating it as a
+      // match would light AWAKE and DAY simultaneously — they differ only
+      // here — and two active tiles reads as a bug. Skipped entirely on a
+      // non-CT bulb, where requiring it would make every scene permanently
+      // inactive instead.
+      if (d.kelvin <= 0 || !kelvinMatches(w.kelvin, d.kelvin)) return false;
+    }
+  }
+  return true;
+}
+
+const char* sceneName(uint16_t idx) {
+  return idx < SCENE_N ? SCENE[idx].name : "?";
+}
+
+uint16_t sceneCount()  { return SCENE_N; }
+uint16_t sceneMaxRow() { return SCENE_MAX_ROW; }
+
+bool sceneScrollBy(int16_t rows) {
+  if (SCENE_MAX_ROW == 0) return false;
+  int32_t r = (int32_t)S.sceneRow + rows;
+  if (r < 0)               r = 0;
+  if (r > SCENE_MAX_ROW)   r = SCENE_MAX_ROW;
+  if ((uint16_t)r == S.sceneRow) return false;
+  S.sceneRow = (uint16_t)r;
+  return true;
+}
+
+void scenePlan(uint16_t idx, uint8_t& offMask, uint8_t& onMask,
+               int& pct, int& kelvin) {
+  offMask = onMask = 0;
+  pct = kelvin = 0;
+  if (idx >= SCENE_N) return;
+
+  for (uint8_t i = 0; i < NUM_BULBS; i++) {
+    const SceneBulb& w = SCENE[idx].b[i];
+    if (w.on) {
+      onMask |= (uint8_t)(1u << i);
+      // Collapsing the ON set into one call is only valid while every ON bulb
+      // in a scene shares a level and colour. That holds for all five today; a
+      // future scene with mixed levels would silently get the last bulb's.
+      pct = w.pct; kelvin = w.kelvin;
+    } else {
+      offMask |= (uint8_t)(1u << i);
+    }
+  }
+}
+
+// One tile. `slot` is where it sits on screen, `idx` which scene it shows.
+static void drawSceneTile(uint8_t slot, uint16_t idx, uint8_t vis) {
+  const int16_t x = sceneTileX(slot), y = sceneTileY(slot);
+
+  // A slot past the end of the table is blanked with the same rect the tile
+  // occupies, which is why a scroll needs no body wipe: every tile either
+  // repaints its own rect or blanks it, and the gaps never change content.
+  if (idx >= SCENE_N) {
+    tft.fillRect(x, y, SCENE_TILE_W, SCENE_TILE_H, C_BG);
+    return;
+  }
+
+  // `mono` means "the fill has taken over the tile's colour" — the pips must
+  // then be drawn in the foreground colour rather than in warm/cool, which
+  // against a C_TEXT press fill or a C_ERROR error border would read as noise.
+  uint16_t fill, edge, fg;
+  bool     mono = true;
+  switch (vis) {
+    case BV_PRESSED:
+      fill = C_TEXT;            edge = C_TEXT;   fg = C_BG;                  break;
+    case BV_ACTIVE:
+      // Tinted rather than a solid accent slab: at 88x64 a saturated fill is the
+      // loudest thing on the panel, and it keeps the solid fill meaningful as
+      // the press flash. Colour pips stay legible on a tint, so not mono.
+      fill = tint565(C_ACCENT); edge = C_ACCENT; fg = C_ACCENT; mono = false; break;
+    case BV_ERR:
+      fill = C_SURFACE;         edge = C_ERROR;  fg = C_ERROR;               break;
+    case BV_DISABLED:
+      fill = C_SURFACE;         edge = C_SURFACE; fg = C_DISABLED;           break;
+    default:
+      fill = C_SURFACE;         edge = C_BORDER; fg = C_TEXT2;  mono = false; break;
+  }
+
+  wCard(x, y, SCENE_TILE_W, SCENE_TILE_H, fill, edge);
+
+  // Three pips, one per bulb, read straight off this scene's own definition:
+  // position says WHICH bulb, colour warm-or-cool, and how bright the pip is
+  // says what level it will be set to. Derived, so it cannot describe something
+  // the tap won't send.
+  const Scene&  sc = SCENE[idx];
+  const int16_t cx = x + SCENE_TILE_W / 2;
+  const int16_t py = y + SCENE_PIP_DY;
+  for (uint8_t i = 0; i < NUM_BULBS; i++) {
+    const int16_t px = cx + ((int16_t)i - 1) * SCENE_PIP_GAP;
+    const SceneBulb& b = sc.b[i];
+    if (!b.on) {
+      wPip(px, py, SCENE_PIP_R, mono ? fg : C_DISABLED, false);
+      continue;
+    }
+    uint16_t c;
+    if (mono) {
+      c = fg;
+    } else {
+      c = (b.kelvin <= 0)               ? C_TEXT2
+        : (b.kelvin <= KELVIN_WARM_MAX) ? C_WARM : C_COOL;
+      // Level as a blend toward the tile, matching how a device card's icon
+      // blends toward its own surface. 1% still lands at 70/255, visible.
+      if (b.pct < BRI_HIGH)
+        c = lerp565(fill, c, (uint8_t)(70 + (int)b.pct * 185 / 100));
+    }
+    wPip(px, py, SCENE_PIP_R, c, true);
+  }
+
+  // 88px of tile holds the name at full size, which is the entire reason this
+  // grid dropped from four columns to three. textFit still guards it, because a
+  // scene added to the table later cannot be checked against a measured width.
+  textFit(F_TITLE, sc.name, nullptr, cx, y + SCENE_NAME_DY,
+          SCENE_TILE_W - 2 * SP_2, fg);
+}
+
+// The gutter at x 300..319. While every scene fits on one page SCENE_MAX_ROW is a
+// constexpr 0, so everything below the early return is unreachable and this is
+// just a 20px margin costing one fillRect — but the arrows, the track and the
+// thumb are all here ready for the first table entry that overflows the screen.
+static void drawSceneScrollbar(uint8_t pressed) {
+  // The body's own bottom edge (STATUS_Y0), not the panel's — the header now
+  // sits below it and must not be touched by this clear.
+  tft.fillRect(SCENE_SB_X0, ROWS_Y0, SCENE_SB_W, STATUS_Y0 - ROWS_Y0, C_BG);
+  if (SCENE_MAX_ROW == 0) return;
+
+  const int16_t cx  = SCENE_SB_X0 + SCENE_SB_W / 2;
+  const int16_t bot = STATUS_Y0 - 1;
+  const bool atTop = (S.sceneRow == 0), atBot = (S.sceneRow >= SCENE_MAX_ROW);
+
+  // Dimmed at the ends rather than hidden: a control that vanishes moves the
+  // other one's apparent target, and this is a resistive panel.
+  icoChevron(cx, ROWS_Y0 + 13, CHEV_UP,
+             pressed == 1 ? C_TEXT : (atTop ? C_DISABLED : C_TEXT2), 6, 5);
+  icoChevron(cx, bot - 13, CHEV_DOWN,
+             pressed == 2 ? C_TEXT : (atBot ? C_DISABLED : C_TEXT2), 6, 5);
+
+  // Track between the arrows, with a thumb sized by how much of the list is on
+  // screen — the only thing that tells you a long list is long.
+  const int16_t tY = ROWS_Y0 + SP_6;
+  const int16_t tH = (bot - SP_6) - tY;
+  tft.drawFastVLine(cx, tY, tH, C_DIVIDER);
+
+  int16_t th = (int16_t)((int32_t)tH * SCENE_VIS_ROWS / SCENE_ROWS_N);
+  if (th < 10) th = 10;
+  // The early return above makes SCENE_MAX_ROW non-zero here, but it is a
+  // constexpr 0 today so the compiler constant-folds this into a literal
+  // division by zero and warns. Substituting 1 in the unreachable case is what
+  // keeps the build warning-free without an `if constexpr` the toolchain's
+  // C++ level may not accept.
+  const uint16_t maxRow = SCENE_MAX_ROW ? SCENE_MAX_ROW : 1;
+  const int16_t ty = tY + (int16_t)((int32_t)(tH - th) * S.sceneRow / maxRow);
+  tft.fillRect(cx - 2, ty, 5, th, C_ACCENT);
+}
+
+void drawScenes() {
+  const uint32_t now = millis();
+
+  bool anyErr = false, unavail = false;
+  for (uint8_t i = 0; i < NUM_BULBS; i++) {
+    bool devStale, devErr;
+    staleErr(S.dev[i], now, devStale, devErr);
+    if (devErr) anyErr = true;
+    if (!S.dev[i].known || !S.dev[i].avail)            unavail = true;
+  }
+
+  // A scroll re-points every slot at a different scene, so not one of the cached
+  // vis bytes describes what is now meant to be there. Treat it as a first draw.
+  const bool     first = !sceneSnap.valid || sceneSnap.row != S.sceneRow;
+  const uint16_t base  = (uint16_t)(S.sceneRow * SCENE_COLS);
+
+  for (uint8_t slot = 0; slot < SCENE_PER_PAGE; slot++) {
+    // The top tile row shares band 0 with the connectivity banner, which owns it
+    // while shown — including across a scroll, which would otherwise repaint
+    // every tile straight over the banner.
+    if (slot < SCENE_COLS && noConnShown()) continue;
+
+    const uint16_t idx = base + slot;
+
+    uint8_t vis = BV_INACTIVE;
+    // An empty slot shares BV_DISABLED, which is safe because slot -> idx is
+    // fixed for a given scroll offset: a slot that is empty stays empty until
+    // `row` changes, and that forces a full redraw anyway.
+    if (idx >= SCENE_N || unavail)                     vis = BV_DISABLED;
+    else if (pressedNow(HIT_SCENE, (int16_t)idx, -1))  vis = BV_PRESSED;
+    // The error belongs to the page, not to one tile — nothing here remembers
+    // which scene was tapped once the press flash has expired.
+    else if (anyErr)                                   vis = BV_ERR;
+    else if (sceneActive(idx))                         vis = BV_ACTIVE;
+
+    if (!first && vis == sceneSnap.vis[slot]) continue;
+    sceneSnap.vis[slot] = vis;
+    drawSceneTile(slot, idx, vis);
+  }
+
+  // The thumb's position depends only on `row`, so `first` already covers moving
+  // it; sbVis exists for the press flash, which expires by time and would
+  // otherwise leave an arrow lit forever — same rule as every other vis byte.
+  const uint8_t sb = pressedNow(HIT_SCROLL, -1, -1) ? 1
+                   : pressedNow(HIT_SCROLL, +1, -1) ? 2 : 0;
+  if (first || sb != sceneSnap.sbVis) {
+    sceneSnap.sbVis = sb;
+    drawSceneScrollbar(sb);
+  }
+
+  sceneSnap.row   = S.sceneRow;
+  sceneSnap.valid = true;
+}

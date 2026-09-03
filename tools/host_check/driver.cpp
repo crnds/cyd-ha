@@ -1,7 +1,7 @@
-// Host-compiled equivalence harness for src/ui/screen.cpp's pure functions —
-// the ones that read DeviceState/THEME[] and return a value, touching no
+// Host-compiled equivalence harness for the UI layer's pure functions — the
+// ones that read DeviceState/THEME[] and return a value, touching no
 // hardware: pctMatches, kelvinMatches, btnActive, iconVis, bulbHue,
-// scenePlan, sceneActive, btnRect/briRect/nightRect/tabRect, screenHitTest —
+// scenePlan, sceneActive, btnRect/settingChipRect/tabRect, screenHitTest —
 // plus two call-counted checks of drawDeviceCard()/drawStatusRoom()'s
 // dirty-region early-out.
 //
@@ -10,12 +10,18 @@
 // golden captured on the pre-refactor code: same stdout, byte for byte, means
 // the logic is unchanged. See README.md in this directory for how to run it.
 //
-// screen.cpp's target functions are `static` (internal linkage), so the only
-// way to reach them from another translation unit without touching
-// screen.cpp itself is to #include it directly into this one — see the
-// #include below. gfx.cpp/icons.cpp/widgets.cpp/theme.cpp are compiled and
-// linked normally; only TFT_eSPI.h and Arduino.h are swapped for host stubs
-// (see stub/), by putting that directory first on the include path.
+// Since screen.cpp was split into screen.cpp (core) + screen_devices.cpp +
+// screen_scenes.cpp + screen_settings.cpp, some of this file's targets are
+// `static` in screen.cpp (tabRect, drawStatusRoom) and some in
+// screen_devices.cpp (btnActive, iconVis, bulbHue) — both are #included
+// directly into this translation unit below, which is the only way to reach
+// `static` (internal-linkage) symbols from outside their own file.
+// screen_scenes.cpp/screen_settings.cpp are compiled and linked normally
+// like gfx.cpp/icons.cpp/widgets.cpp/theme.cpp: this driver only ever calls
+// their PUBLIC entry points (sceneActive, scenePlan, settingChipRect, ...),
+// so an ordinary link is enough and there's no need to inline them too. Only
+// TFT_eSPI.h and Arduino.h are swapped for host stubs (see stub/), by
+// putting that directory first on the include path.
 
 #include "state.h"
 
@@ -28,6 +34,7 @@ unsigned long millis() { return g_millis; }
 static void hostSetMillis(unsigned long ms) { g_millis = ms; }
 
 #include "screen.cpp"
+#include "screen_devices.cpp"
 
 #include <cstdio>
 #include <cstring>
