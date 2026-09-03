@@ -66,6 +66,11 @@
 // still far faster than any finger tap — no need to pay it every loop pass
 #define TOUCH_POLL_MS      50UL
 #define PRESS_FLASH_MS     120UL     // invert the tapped button this long, for tactility
+// How long a failed service call flashes a card's border/state text red. Was
+// hardcoded 1500 at three separate sites in screen.cpp (and mirrored by hand
+// in simulator.html) with nothing tying them together — a live drift risk in
+// a file whose comments call out exactly this failure mode elsewhere.
+#define ERR_FLASH_MS       1500UL
 
 // ── CYD pins (ESP32-2432S028R) ───────────────────────────
 #define PIN_BACKLIGHT  21

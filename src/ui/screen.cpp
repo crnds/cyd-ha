@@ -152,16 +152,16 @@ static_assert(SCENE_X0 + (SCENE_COLS - 1) * SCENE_PITCH_X + SCENE_TILE_W
 // centres cleanly in a 26px chip, while a lowercase 'y' would touch its edge.
 // Titles and tab labels have the vertical room, so they get sentence case, which
 // reads considerably calmer at this size.
-static const char* BULB_LABEL[BULB_BTNS]     = {"OFF", "1%", "30%", "100%", nullptr, nullptr};
-static const char* BULB_LABEL_ALT[BULB_BTNS] = {"OFF", "1",  "30",  "100",  nullptr, nullptr};
+static const char* const BULB_LABEL[BULB_BTNS]     = {"OFF", "1%", "30%", "100%", nullptr, nullptr};
+static const char* const BULB_LABEL_ALT[BULB_BTNS] = {"OFF", "1",  "30",  "100",  nullptr, nullptr};
 // AC slots 3..5 are the setpoint stepper — two chevrons around the value — so
 // they carry no label. See btnRect() for how those three slots are placed.
-static const char* AC_LABEL[AC_BTNS]         = {"OFF", "COOL", "DRY", nullptr, nullptr, nullptr};
+static const char* const AC_LABEL[AC_BTNS]         = {"OFF", "COOL", "DRY", nullptr, nullptr, nullptr};
 
 // Indexed by PageId. Sentence case, and they fit with room to spare: the widest
 // ("Settings") is 49px in Font 2 of the 73px a cell leaves after TAB_LBL_DX,
 // measured rather than guessed. That width is also what the underline spans.
-static const char* TAB_LABEL[TAB_COUNT] = {"Devices", "Scenes", "Settings"};
+static const char* const TAB_LABEL[TAB_COUNT] = {"Devices", "Scenes", "Settings"};
 
 static const char* const BRI_LABEL[BRI_STEPS] = BRI_LABEL_LIST;
 
@@ -169,13 +169,13 @@ static const char* const BRI_LABEL[BRI_STEPS] = BRI_LABEL_LIST;
 // control is never asking about a value the user has to remember. Night
 // mode has no caption of its own now — a chip row replaces it, one label per
 // state, since there's no longer a single fixed effect to describe.
-static const char* SET_LABEL[SET_ROWS] = {
+static const char* const SET_LABEL[SET_ROWS] = {
   "Brightness", "Night mode", "Night schedule", "Flip screen"
 };
-static const char* SET_CAPTION[SET_ROWS] = {
+static const char* const SET_CAPTION[SET_ROWS] = {
   nullptr, nullptr, "23:45 - 08:00", "Rotate 180 degrees"
 };
-static const char* NIGHT_LABEL[NIGHT_CHIPS] = { "OFF", "SHIFT", "RED" };
+static const char* const NIGHT_LABEL[NIGHT_CHIPS] = { "OFF", "SHIFT", "RED" };
 
 // ── scenes ───────────────────────────────────────────────
 // Macros over the three bulbs. The AC is deliberately untouched: it runs on a
@@ -376,44 +376,38 @@ static inline int16_t sceneTileY(uint8_t slot) {
 // down-right) and each reasoning is retired along with its layout. The slot
 // numbers themselves are fixed by doAction(), so mapping them here is what
 // buys whichever order is wanted without touching the action layer.
-static void btnRect(uint8_t dev, uint8_t b,
-                    int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
+struct Rect { int16_t x, y, w, h; };
+
+static Rect btnRect(uint8_t dev, uint8_t b) {
+  int16_t x, y, w, h;
   y = cardTop(dev) + BULB_CTL_DY;
   h = BULB_CTL_H;
 
   if (S.dev[dev].kind == DEV_CLIMATE) {
-    if (b < 3) { x = BULB_CTL_X0 + b * ACM_PITCH; w = ACM_W; return; }
+    if (b < 3) { x = BULB_CTL_X0 + b * ACM_PITCH; w = ACM_W; return {x, y, w, h}; }
     switch (b) {
-      case AC_BTN_TDN:  x = ACS_X0;                            w = ACS_BTN_W; return;
-      case AC_BTN_TEMP: x = ACS_X0 + ACS_BTN_W;                w = ACS_VAL_W; return;
-      default:          x = ACS_X0 + ACS_BTN_W + ACS_VAL_W;    w = ACS_BTN_W; return;
+      case AC_BTN_TDN:  x = ACS_X0;                         w = ACS_BTN_W; return {x, y, w, h};
+      case AC_BTN_TEMP: x = ACS_X0 + ACS_BTN_W;             w = ACS_VAL_W; return {x, y, w, h};
+      default:          x = ACS_X0 + ACS_BTN_W + ACS_VAL_W; w = ACS_BTN_W; return {x, y, w, h};
     }
   }
 
-  if (b < 4) { x = BULB_CTL_X0 + b * BULB_CHIP_PITCH; w = BULB_CHIP_W; return; }
+  if (b < 4) { x = BULB_CTL_X0 + b * BULB_CHIP_PITCH; w = BULB_CHIP_W; return {x, y, w, h}; }
   x = SW_X0 + (b - 4) * SW_CELL_W;
   w = SW_CELL_W;
+  return {x, y, w, h};
 }
 
-// The five brightness chips share the device rows' chip pitch — one grid, so a
-// control on the Settings page and a control on a device card are the same size
-// and the pages read as one product.
-static void briRect(uint8_t b, int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
-  x = CARD_IN_X0 + b * CHIP_PITCH;
-  w = CHIP_W;
-  y = cardTop(SET_ROW_BRI) + CTL_DY;
-  h = CTL_H;
-}
-
-// The Night mode row's 3 chips (Off/Shift/Red), on the same shared chip pitch.
-// NIGHT_CHIPS(3) uses far less of CARD_IN_W than BRI_STEPS(5) does, so there's
-// no static_assert risk here in practice — added anyway to match the
-// brightness row's and catch a future edit that widens the chips.
-static void nightRect(uint8_t c, int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
-  x = CARD_IN_X0 + c * CHIP_PITCH;
-  w = CHIP_W;
-  y = cardTop(SET_ROW_NIGHT) + CTL_DY;
-  h = CTL_H;
+// Both Settings chip rows (5 brightness chips, 3 night-mode chips) share the
+// device rows' chip pitch — one grid, so a control on the Settings page and a
+// control on a device card are the same size and the pages read as one
+// product — and differ only in which row they sit on. NIGHT_CHIPS(3) uses far
+// less of CARD_IN_W than BRI_STEPS(5) does, so there's no static_assert risk
+// there in practice; the brightness row's is kept anyway to catch a future
+// edit that widens the chips.
+static Rect settingChipRect(uint8_t row, uint8_t i) {
+  return { (int16_t)(CARD_IN_X0 + i * CHIP_PITCH), (int16_t)(cardTop(row) + CTL_DY),
+           (int16_t)CHIP_W, (int16_t)CTL_H };
 }
 
 // One place that knows the press-flash timing rule. pressKind is what keeps it
@@ -422,6 +416,23 @@ static void nightRect(uint8_t c, int16_t& x, int16_t& y, int16_t& w, int16_t& h)
 static inline bool pressedNow(HitKind k, int16_t idx, int8_t sub) {
   return S.pressKind == k && S.pressIdx == idx && S.pressSub == sub &&
          S.pressMs && (millis() - S.pressMs) < PRESS_FLASH_MS;
+}
+
+// One place that knows the other two time-derived flags: a poll gone quiet
+// (see DEVICE_STALE_MS) and a service call's red flash (see ERR_FLASH_MS).
+// Was three separate copies of this pair (drawDeviceCard, drawStatusRoom,
+// and half of it — err only — in drawScenes' anyErr loop).
+static inline void staleErr(const DeviceState& d, uint32_t now, bool& stale, bool& err) {
+  stale = d.known && (now - d.okMs > DEVICE_STALE_MS);
+  err   = d.errMs && (now - d.errMs < ERR_FLASH_MS);
+}
+
+// The alarm/stale/normal text-colour ladder, shared by the identity name and
+// (the two-argument shape of) the AC setpoint: red outranks everything, a
+// stale-but-otherwise-fine reading dims, anything else gets its caller's
+// normal colour.
+static inline uint16_t alarmFg(bool alarm, bool stale, uint16_t base) {
+  return alarm ? C_ERROR : (stale ? C_DIM : base);
 }
 
 // True while the connectivity banner OWNS row band 0, so every page's draw
@@ -686,12 +697,14 @@ static void drawDeviceCard(uint8_t dev, bool force) {
   DeviceState& d   = S.dev[dev];
   const uint32_t now = millis();
 
-  const bool stale = d.known && (now - d.okMs > DEVICE_STALE_MS);
-  const bool err   = d.errMs && (now - d.errMs < 1500);
+  bool stale, err;
+  staleErr(d, now, stale, err);
 
-  const int8_t press = (S.pressKind == HIT_ROW && S.pressIdx == (int16_t)dev &&
-                        S.pressMs && now - S.pressMs < PRESS_FLASH_MS)
-                           ? S.pressSub : -1;
+  // Whichever sub-index is currently recorded as pressed, if it's this row's
+  // press and still inside its flash window — pressedNow() already knows
+  // that whole rule; asking it about S.pressSub (trivially matching itself)
+  // is the same result as the timing formula this used to re-implement here.
+  const int8_t press = pressedNow(HIT_ROW, (int16_t)dev, S.pressSub) ? S.pressSub : -1;
 
   RowSnap&      sn    = snap[dev];
   const bool    first = force || !sn.valid;
@@ -777,7 +790,7 @@ static void drawDeviceCard(uint8_t dev, bool force) {
     // once OFFLINE (or, for the AC, an exceptional mode's name) is gone: a red
     // name beside a red icon inside a red border, with every control greyed, is
     // what that failure looks like regardless of kind.
-    const uint16_t nameFg = alarm ? C_ERROR : (stale ? C_DIM : C_TEXT);
+    const uint16_t nameFg = alarmFg(alarm, stale, C_TEXT);
     textTrunc(F_TITLE, d.name, CARD_TXT_X, idCy, BULB_NAME_W, nameFg);
 
     sn.icoShape  = icoShape;
@@ -817,8 +830,8 @@ static void drawDeviceCard(uint8_t dev, bool force) {
     if (!first && vis == sn.btnVis[b]) continue;
     sn.btnVis[b] = vis;
 
-    int16_t x, y, w, h;
-    btnRect(dev, b, x, y, w, h);
+    const Rect r = btnRect(dev, b);
+    const int16_t x = r.x, y = r.y, w = r.w, h = r.h;
 
     if (ac) {
       if (b == AC_BTN_TUP || b == AC_BTN_TDN)
@@ -843,15 +856,19 @@ static void drawDeviceCard(uint8_t dev, bool force) {
     tempText(d, tv, sizeof(tv));
     if (first || stale != sn.stale || err != sn.err || acOff != sn.acOff ||
         strcmp(tv, sn.tempStr) != 0) {
-      int16_t x, y, w, h;
-      btnRect(dev, AC_BTN_TEMP, x, y, w, h);
+      const Rect r = btnRect(dev, AC_BTN_TEMP);
+      const int16_t x = r.x, y = r.y, w = r.w, h = r.h;
       const bool known = (tv[0] != '-');
       // Greyed the same as a disabled chevron beside it (C_DISABLED) when the
       // AC is off — the setpoint can't be stepped, so it shouldn't read as
       // live text.
+      // Not alarmFg(): this ladder has a fourth rung (acOff) sitting between
+      // the alarm and stale checks, so the two-branch helper above doesn't
+      // fit without contorting it — `alarm` is still reused here rather than
+      // re-deriving err || !d.avail a second time in the same function.
       wValue(x, y, w, h, tv, known,
-             err || !d.avail ? C_ERROR
-                              : (acOff ? C_DISABLED : (stale ? C_DIM : C_TEXT)),
+             alarm ? C_ERROR
+                   : (acOff ? C_DISABLED : (stale ? C_DIM : C_TEXT)),
              C_BG);
       snprintf(sn.tempStr, sizeof(sn.tempStr), "%s", tv);
     }
@@ -910,10 +927,17 @@ static void tabRect(uint8_t i, int16_t& x, int16_t& w) {
 // cell IS the rect handed to wTab, which is what seats the underline on the
 // header rule: the clear starts at STATUS_DIV_Y+1, so the bar lands on the
 // first row below the rule rather than on top of it.
+// The one rect shape every header region clears: full region height below the
+// rule, callee's own x/w. All three regions (tabs, room reading, clock) drew
+// this identically inline.
+static inline void clearHeaderRegion(int16_t x, int16_t w) {
+  tft.fillRect(x, STATUS_DIV_Y + 1, w, STATUS_H - 1, C_BG);
+}
+
 static void drawTab(uint8_t i, const char* label, uint8_t vis) {
   int16_t x, w;
   tabRect(i, x, w);
-  tft.fillRect(x, STATUS_DIV_Y + 1, w, STATUS_H - 1, C_BG);
+  clearHeaderRegion(x, w);
   wTab(x, STATUS_DIV_Y + 1, w, STATUS_H - 1, label, vis);
 }
 
@@ -942,9 +966,9 @@ static void drawTab(uint8_t i, const char* label, uint8_t vis) {
 static void drawStatusRoom(bool force) {
   DeviceState& d   = S.dev[NUM_BULBS];
   const uint32_t now = millis();
-  const bool stale = d.known && (now - d.okMs > DEVICE_STALE_MS);
-  const bool err   = d.errMs && (now - d.errMs < 1500);
-  const uint16_t fg = (err || !d.avail) ? C_ERROR : (stale ? C_DIM : C_TEXT2);
+  bool stale, err;
+  staleErr(d, now, stale, err);
+  const uint16_t fg = alarmFg(err || !d.avail, stale, C_TEXT2);
 
   // Raw-input pre-filter (see RoomFingerprint above): skip the snprintf()s
   // and strcmp()s below entirely when nothing that feeds them has moved,
@@ -966,7 +990,7 @@ static void drawStatusRoom(bool force) {
     return;
 
   const int16_t x0 = SCR_W - STATUS_ROOM_W - STATUS_CLK_W;
-  tft.fillRect(x0, STATUS_DIV_Y + 1, STATUS_ROOM_W, STATUS_H - 1, C_BG);
+  clearHeaderRegion(x0, STATUS_ROOM_W);
 
   // The small "%" sits on the BIG digits' baseline, not on their centre line:
   // F_NUM's baseline is cy+10 and F_TITLE's is cy+5, so shifting its datum down
@@ -1047,8 +1071,7 @@ static void drawStatus(bool force) {
   // repaints on ITS OWN compare and would leave the overflow permanent — don't
   // put anything else here.
   if (force_ || hhmm != statusSnap.hhmm) {
-    tft.fillRect(SCR_W - STATUS_CLK_W, STATUS_DIV_Y + 1, STATUS_CLK_W,
-                 STATUS_H - 1, C_BG);
+    clearHeaderRegion(SCR_W - STATUS_CLK_W, STATUS_CLK_W);
     char clk[8];
     if (hhmm < 0) snprintf(clk, sizeof(clk), "--:--");
     else          snprintf(clk, sizeof(clk), "%02d:%02d", hhmm / 60, hhmm % 60);
@@ -1259,7 +1282,9 @@ static void drawScenes() {
 
   bool anyErr = false, unavail = false;
   for (uint8_t i = 0; i < NUM_BULBS; i++) {
-    if (S.dev[i].errMs && now - S.dev[i].errMs < 1500) anyErr = true;
+    bool devStale, devErr;
+    staleErr(S.dev[i], now, devStale, devErr);
+    if (devErr) anyErr = true;
     if (!S.dev[i].known || !S.dev[i].avail)            unavail = true;
   }
 
@@ -1385,9 +1410,8 @@ static void drawSettings() {
     if (!first && vis == setSnap.briVis[b]) continue;
     setSnap.briVis[b] = vis;
 
-    int16_t x, y, w, h;
-    briRect(b, x, y, w, h);
-    wChip(x, y, w, h, BRI_LABEL[b], nullptr, vis);
+    const Rect r = settingChipRect(SET_ROW_BRI, b);
+    wChip(r.x, r.y, r.w, r.h, BRI_LABEL[b], nullptr, vis);
   }
 
   // Night mode's 3-chip row, same shape as the brightness loop above.
@@ -1399,9 +1423,8 @@ static void drawSettings() {
     if (!first && vis == setSnap.nightVis[c]) continue;
     setSnap.nightVis[c] = vis;
 
-    int16_t x, y, w, h;
-    nightRect(c, x, y, w, h);
-    wChip(x, y, w, h, NIGHT_LABEL[c], nullptr, vis);
+    const Rect r = settingChipRect(SET_ROW_NIGHT, c);
+    wChip(r.x, r.y, r.w, r.h, NIGHT_LABEL[c], nullptr, vis);
   }
 
   // Toggles get no press flash: the flip IS the feedback, and it is immediate.
@@ -1595,9 +1618,8 @@ void screenCalibVerifyScreen() {
   // chevron a near-miss reaches.
   for (uint8_t d = 0; d < NUM_DEVICES; d++) {
     for (uint8_t b = 0; b < btnCount(S.dev[d]); b++) {
-      int16_t x, y, w, h;
-      btnRect(d, b, x, y, w, h);
-      tft.drawRect(x, y, w, h, C_BORDER);
+      const Rect r = btnRect(d, b);
+      tft.drawRect(r.x, r.y, r.w, r.h, C_BORDER);
     }
   }
   // The tab strip too. It is the thinnest target in the firmware and sits in
@@ -1671,17 +1693,15 @@ Hit screenHitTest(int16_t px, int16_t py) {
       if (r < 0 || r >= SET_ROWS) return miss;
       if (r == SET_ROW_BRI) {
         for (uint8_t b = 0; b < BRI_STEPS; b++) {
-          int16_t x, y, w, h;
-          briRect(b, x, y, w, h);
-          if (px >= x && px < x + w) return { HIT_SETTING, SET_ROW_BRI, (int8_t)b };
+          const Rect cr = settingChipRect(SET_ROW_BRI, b);
+          if (px >= cr.x && px < cr.x + cr.w) return { HIT_SETTING, SET_ROW_BRI, (int8_t)b };
         }
         return miss;
       }
       if (r == SET_ROW_NIGHT) {
         for (uint8_t c = 0; c < NIGHT_CHIPS; c++) {
-          int16_t x, y, w, h;
-          nightRect(c, x, y, w, h);
-          if (px >= x && px < x + w) return { HIT_SETTING, SET_ROW_NIGHT, (int8_t)c };
+          const Rect cr = settingChipRect(SET_ROW_NIGHT, c);
+          if (px >= cr.x && px < cr.x + cr.w) return { HIT_SETTING, SET_ROW_NIGHT, (int8_t)c };
         }
         return miss;
       }
@@ -1700,12 +1720,11 @@ Hit screenHitTest(int16_t px, int16_t py) {
         // miss rather than a third action. That dead cell between the chevrons
         // is also what stops a slightly-off tap from stepping the wrong way.
         if (ac && b == AC_BTN_TEMP) continue;
-        int16_t x, y, w, h;
-        btnRect(i, b, x, y, w, h);
+        const Rect r = btnRect(i, b);
         // Vertically the whole row band counts as the control strip: this is a
         // bedroom device often used in the dark, so targets are 52px not 26px.
         // `i` already came from that band, so only px needs testing.
-        if (px >= x && px < x + w) return { HIT_ROW, (int16_t)i, (int8_t)b };
+        if (px >= r.x && px < r.x + r.w) return { HIT_ROW, (int16_t)i, (int8_t)b };
       }
       return miss;
     }

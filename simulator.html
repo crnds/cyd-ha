@@ -516,8 +516,11 @@ let dev=[
 ];
 const AC_MODES=['off','cool','dry','heat'];
 function cycleMode(){ const d=dev[3]; d.mode=AC_MODES[(AC_MODES.indexOf(d.mode)+1)%AC_MODES.length]; draw(); }
-function errFlash(){ errAt=Date.now(); draw(); setTimeout(()=>{errAt=0;draw();},1500); }
-const isErr=()=>errAt&&Date.now()-errAt<1500;
+// Mirrors config.h's ERR_FLASH_MS — was a bare 1500 at both call sites here,
+// same drift risk the C++ constant was added to close.
+const ERR_FLASH_MS=1500;
+function errFlash(){ errAt=Date.now(); draw(); setTimeout(()=>{errAt=0;draw();},ERR_FLASH_MS); }
+const isErr=()=>errAt&&Date.now()-errAt<ERR_FLASH_MS;
 function setAll(on){ dev.forEach(d=>{ if(d.kind==='light') d.on=on; }); draw(); }
 
 const cv=document.getElementById('c'), g=cv.getContext('2d'), S=1;

@@ -208,23 +208,20 @@ static void dumpGeometry() {
   resetDevices();
   for (uint8_t dev = 0; dev < NUM_DEVICES; dev++)
     for (uint8_t b = 0; b < btnCount(S.dev[dev]); b++) {
-      int16_t x, y, w, h;
-      btnRect(dev, b, x, y, w, h);
-      printf("btnRect dev=%d b=%d -> x=%d y=%d w=%d h=%d\n", dev, b, x, y, w, h);
+      const Rect r = btnRect(dev, b);
+      printf("btnRect dev=%d b=%d -> x=%d y=%d w=%d h=%d\n", dev, b, r.x, r.y, r.w, r.h);
     }
 
   printf("== briRect ==\n");
   for (uint8_t b = 0; b < BRI_STEPS; b++) {
-    int16_t x, y, w, h;
-    briRect(b, x, y, w, h);
-    printf("briRect b=%d -> x=%d y=%d w=%d h=%d\n", b, x, y, w, h);
+    const Rect r = settingChipRect(SET_ROW_BRI, b);
+    printf("briRect b=%d -> x=%d y=%d w=%d h=%d\n", b, r.x, r.y, r.w, r.h);
   }
 
   printf("== nightRect ==\n");
   for (uint8_t c = 0; c < NIGHT_CHIPS; c++) {
-    int16_t x, y, w, h;
-    nightRect(c, x, y, w, h);
-    printf("nightRect c=%d -> x=%d y=%d w=%d h=%d\n", c, x, y, w, h);
+    const Rect r = settingChipRect(SET_ROW_NIGHT, c);
+    printf("nightRect c=%d -> x=%d y=%d w=%d h=%d\n", c, r.x, r.y, r.w, r.h);
   }
 
   printf("== tabRect ==\n");
