@@ -25,10 +25,6 @@
 // all, which removes the two heap allocations the old poll made every cycle.
 bool haPollAll();
 
-// GET /api/states/<entity_id> -> fills the light or climate fields of `d`.
-// Retained for one-off diagnostics; the steady-state path is haPollAll().
-bool haPollDevice(DeviceState& d);
-
 // True while the last call failed recently (see HA_BREAKER_MS). Callers that
 // run on a tap should skip the network and fail fast instead of paying another
 // blocking timeout with the UI frozen.

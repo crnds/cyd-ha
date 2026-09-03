@@ -1,7 +1,6 @@
 #include "ha.h"
 #include "config.h"
 #include "secrets.h"
-#include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <WiFiClient.h>
 #include <math.h>
@@ -249,108 +248,6 @@ bool haPollAll() {
     markResult(false);
     return false;
   }
-  markResult(true);
-  return true;
-}
-
-// ── single-entity polling (diagnostics) ──────────────────
-
-static void parseLight(DeviceState& d, JsonDocument& doc) {
-  const char* st = doc["state"] | "";
-  d.avail = !isUnavail(st);
-  d.on = (strcmp(st, "on") == 0);
-
-  JsonObject at = doc["attributes"];
-
-  // brightness is absent while the bulb is off — keep the last known level so
-  // returning to "on" still shows a sensible highlight.
-  if (!at["brightness"].isNull()) {
-    int b = at["brightness"].as<int>();
-    d.pct = (int)lroundf(b * 100.0f / 255.0f);
-  }
-  if (!at["color_temp_kelvin"].isNull()) {
-    d.kelvin = at["color_temp_kelvin"].as<int>();
-  }
-
-  // supported_color_modes tells us whether the warm/cool swatches can do
-  // anything at all. IKEA ships both "white spectrum" (color_temp) and plain
-  // dimmable-white TRADFRI bulbs, and they look identical in the app.
-  JsonArray modes = at["supported_color_modes"];
-  if (!modes.isNull()) {
-    bool ct = false;
-    for (JsonVariant m : modes) {
-      const char* s = m.as<const char*>();
-      if (s && strcmp(s, "color_temp") == 0) { ct = true; break; }
-    }
-    d.supportsCT = ct;
-  }
-}
-
-static void parseClimate(DeviceState& d, JsonDocument& doc) {
-  // For a climate entity the top-level state IS the hvac mode.
-  const char* st = doc["state"] | "";
-  d.avail = !isUnavail(st);
-  strncpy(d.mode, st, sizeof(d.mode) - 1);
-  d.mode[sizeof(d.mode) - 1] = '\0';
-
-  JsonObject at = doc["attributes"];
-  if (!at["temperature"].isNull())         d.target = at["temperature"].as<float>();
-  if (!at["current_temperature"].isNull()) d.room   = at["current_temperature"].as<float>();
-  if (!at["min_temp"].isNull())            d.tMin   = at["min_temp"].as<float>();
-  if (!at["max_temp"].isNull())            d.tMax   = at["max_temp"].as<float>();
-  // Sensibo reports 1.0 on most units but 0.5 on some — always prefer the
-  // entity's own value so a chevron tap steps by exactly what HA will accept.
-  if (!at["target_temp_step"].isNull())    d.tStep  = at["target_temp_step"].as<float>();
-}
-
-bool haPollDevice(DeviceState& d) {
-  char path[128];
-  snprintf(path, sizeof(path), "/api/states/%s", d.entityId);
-
-  HTTPClient http;
-  if (!haBegin(http, path)) { markResult(false); return false; }
-
-  int code = http.GET();
-  if (code != 200) {
-    Serial.printf("ha: GET %s -> %d\n", d.entityId, code);
-    http.end();
-    markResult(false);
-    return false;
-  }
-
-  // Filter so only the handful of fields we render is ever materialised —
-  // a light's full attribute blob (effect lists, icons) is far larger.
-  JsonDocument filter;
-  filter["state"] = true;
-  JsonObject fa = filter["attributes"].to<JsonObject>();
-  if (d.kind == DEV_CLIMATE) {
-    fa["temperature"]         = true;
-    fa["current_temperature"] = true;
-    fa["min_temp"]            = true;
-    fa["max_temp"]            = true;
-    fa["target_temp_step"]    = true;
-  } else {
-    fa["brightness"]            = true;
-    fa["color_temp_kelvin"]     = true;
-    fa["supported_color_modes"] = true;
-  }
-
-  JsonDocument doc;
-  DeserializationError err =
-      deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
-
-  if (err) {
-    Serial.printf("ha: json %s -> %s\n", d.entityId, err.c_str());
-    markResult(false);
-    return false;
-  }
-
-  if (d.kind == DEV_CLIMATE) parseClimate(d, doc);
-  else                       parseLight(d, doc);
-
-  d.known = true;
-  d.okMs  = millis();
   markResult(true);
   return true;
 }

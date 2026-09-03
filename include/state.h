@@ -71,7 +71,10 @@ struct DeviceState {
   bool on         = false;
   int  pct        = -1;      // brightness 0-100, -1 = unknown
   int  kelvin     = -1;      // colour temp, -1 = unknown or unsupported
-  bool supportsCT = true;    // false greys out the warm/cool swatches
+  // false greys out the warm/cool swatches. Only ever written by the
+  // single-entity poll path, which has no caller in the shipped firmware, so
+  // this is currently always true and the greying-out branch is unreachable.
+  bool supportsCT = true;
 
   // ── climate.* ──
   // `mode` mirrors the entity's state string, which for climate IS the hvac
