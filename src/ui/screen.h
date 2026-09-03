@@ -24,6 +24,19 @@ void screenInvalidate();
 void screenSetNightMode(uint8_t mode);
 void screenSetFlip(bool flip);
 
+// Caches the wall clock (minute-of-day, hour*60+min; -1 = NTP still unsynced)
+// for the header's clock region and the room reading's staleness maths.
+// Call once per loop() pass, before the first screenRender() of that pass —
+// screenRender() runs up to 4 times in one pass (doAction()/doScene()/
+// doSetting()'s immediate optimistic repaint, plus loop()'s own), and this is
+// what keeps drawStatus() from calling getLocalTime() itself that many times
+// over for a value that cannot have changed within one pass. Same "safe to
+// call every loop pass, no-op cost" contract as screenSetNightMode/
+// screenSetFlip above, for the same reason: `tft` is file-static in
+// screen.cpp, so main.cpp reaches the header through a setter rather than
+// touching it directly.
+void screenSetClock(int16_t hhmm);
+
 // Maps a touch point to whatever control is under it on the current page.
 // Returns { HIT_NONE, -1, -1 } for a miss. Vertically, a whole row band (or
 // scene pitch) counts as its control, so a tap slightly high or low registers.

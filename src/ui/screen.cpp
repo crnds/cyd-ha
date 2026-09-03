@@ -415,13 +415,19 @@ static void drawStatusRoom(bool force) {
   statusSnap.roomFg = fg;
 }
 
+// Written by screenSetClock() (public API — see screen.h), read by
+// drawStatus() below instead of it calling getLocalTime() itself:
+// screenRender() (and so drawStatus()) can run up to 4 times in one loop()
+// pass — doAction()/doScene()/doSetting()'s immediate optimistic repaint,
+// plus loop()'s own — and the wall clock cannot have changed within a pass.
+static int16_t cachedHhmm = -1;
+
 static void drawStatus(bool force) {
-  // Local wall clock, 24h. getLocalTime with a 0 ms timeout returns immediately
-  // — it must never block, since this runs on every render pass. It reports
-  // false until SNTP has landed, which is what drives the "--:--" placeholder.
-  int16_t hhmm = -1;
-  struct tm tmv;
-  if (getLocalTime(&tmv, 0)) hhmm = (int16_t)(tmv.tm_hour * 60 + tmv.tm_min);
+  // Wall clock, 24h, -1 = NTP still unsynced (drives the "--:--" placeholder).
+  // Read from screenSetClock()'s cache rather than calling getLocalTime()
+  // itself: this runs on every render pass — up to 4 times in one loop() pass
+  // — for a value that cannot have changed within a pass. See screen.h.
+  const int16_t hhmm = cachedHhmm;
 
   const bool force_ = force || !statusSnap.valid;
 
@@ -596,6 +602,12 @@ void screenSetNightMode(uint8_t mode) {
   tft.fillScreen(C_BG);
   screenInvalidate();
 }
+
+// No invalidate needed here: drawStatus()'s own compare against
+// statusSnap.hhmm already repaints the clock exactly when this changes, the
+// same as it always did with a freshly-read value. See cachedHhmm's own
+// comment (above drawStatus()) for why this exists.
+void screenSetClock(int16_t hhmm) { cachedHhmm = hhmm; }
 
 void screenInvalidate() {
   memset(snap,        0, sizeof(snap));

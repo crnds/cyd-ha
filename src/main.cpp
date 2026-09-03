@@ -213,19 +213,19 @@ static void applySettings() {
 // through both boundary checks below untouched unless one of them actually
 // fires, at which point it loses to whichever the boundary sets. The schedule
 // never selects Shift itself.
-static void serviceNightSchedule() {
+// `hhmm` is read once per loop() pass (hour*60+min, -1 = NTP still unsynced)
+// rather than by this function calling getLocalTime() itself — see loop()'s
+// comment. An unsynced clock must never be read as midnight, so a negative
+// value is treated exactly like the old "getLocalTime() returned false".
+static void serviceNightSchedule(int16_t hhmm) {
   static int16_t lastMin = -1;
 
   // Reset so re-enabling the schedule re-adopts the current window rather than
   // waiting up to a day for the next boundary.
   if (!S.set.nightSched) { lastMin = -1; return; }
+  if (hhmm < 0) return;
 
-  struct tm t;
-  // Zero timeout: this runs every loop pass and must never block. Returns false
-  // until SNTP lands, and an unsynced clock must never be read as midnight.
-  if (!getLocalTime(&t, 0)) return;
-
-  int16_t m = (int16_t)(t.tm_hour * 60 + t.tm_min);
+  const int16_t m = hhmm;
   if (m == lastMin) return;
 
   if (lastMin < 0) {
@@ -233,7 +233,7 @@ static void serviceNightSchedule() {
     // window. This is what makes a 02:00 reboot come up already in night mode.
     S.set.nightMode = (m >= NIGHT_ON_MIN || m < NIGHT_OFF_MIN) ? NIGHT_RED : NIGHT_OFF;
     Serial.printf("night: adopting window at %02d:%02d -> %d\n",
-                  t.tm_hour, t.tm_min, S.set.nightMode);
+                  m / 60, m % 60, S.set.nightMode);
   } else {
     // The `lastMin < B && m > B` half catches a boundary missed because a
     // blocking HTTP call held loop() across the minute. Neither clause misfires
@@ -255,16 +255,13 @@ static void serviceNightSchedule() {
 // pattern serviceNightSchedule() uses for its two boundaries — deliberately
 // NOT the same function, because unlike night mode this has exactly one
 // boundary and nothing to adopt at boot (a fresh boot is itself a restart).
-static void serviceDailyRestart() {
+// `hhmm`: see serviceNightSchedule()'s comment — same shared reading, same
+// "negative means unsynced, treat like getLocalTime() returning false" rule.
+static void serviceDailyRestart(int16_t hhmm) {
   static int16_t lastMin = -1;
+  if (hhmm < 0) return;
 
-  struct tm t;
-  // Zero timeout, same reasoning as serviceNightSchedule(): runs every loop
-  // pass and must never block, and an unsynced clock must never be read as
-  // matching the boundary.
-  if (!getLocalTime(&t, 0)) return;
-
-  int16_t m = (int16_t)(t.tm_hour * 60 + t.tm_min);
+  const int16_t m = hhmm;
   if (m == lastMin) return;
 
   // The first valid reading only adopts the clock; it must NOT restart, or a
@@ -336,6 +333,69 @@ static void logHeap() {
 enum ActKind : uint8_t { ACT_NONE, ACT_L_OFF, ACT_L_BRI, ACT_L_KELVIN,
                          ACT_C_MODE, ACT_C_TEMP };
 
+// Decodes a button tap into what doAction() should apply and fire. This is
+// NOT table-driven: several branches carry real per-button side effects
+// (errMs stamps, distinct log lines, the fabsf at-limit check) that a table
+// would need an escape hatch for per row, moving complexity rather than
+// removing it. Returns false when there is nothing to do — already handled
+// (logged, errMs stamped) right here — true with kind/iArg/fArg/sArg
+// populated otherwise.
+static bool decodeAction(DeviceState& d, int8_t btn, ActKind& kind,
+                         int& iArg, float& fArg, const char*& sArg) {
+  if (d.kind == DEV_CLIMATE) {
+    switch (btn) {
+      case 0: kind = ACT_C_MODE; sArg = "off";        return true;
+      case 1: kind = ACT_C_MODE; sArg = AC_MODE_COOL; return true;
+      case 2: kind = ACT_C_MODE; sArg = AC_MODE_DRY;  return true;
+      // AC_BTN_TEMP (the slot between these two) is the setpoint READOUT and
+      // falls through to `default: return false`. screenHitTest() already
+      // reports a tap there as a miss, so this is belt and braces.
+      case AC_BTN_TUP:
+      case AC_BTN_TDN: {
+        // Mirrors the chevrons' greyed-out BV_DISABLED state on screen: with
+        // the AC off there is no active setpoint to step, so a tap here is
+        // ignored the same way a swatch tap is on a bulb with !supportsCT.
+        if (strcmp(d.mode, "off") == 0) return false;
+        // The steps are relative, so they cannot act until a real setpoint is
+        // known — the same rule that makes the readout show "--" until then.
+        if (!d.known || isnan(d.target)) {
+          d.errMs = millis();
+          Serial.println("ac: no setpoint known yet, ignoring step");
+          return false;
+        }
+        float t = d.target + (btn == AC_BTN_TUP ? d.tStep : -d.tStep);
+        if (t < d.tMin) t = d.tMin;
+        if (t > d.tMax) t = d.tMax;
+        // Already at the limit. Flash the row instead of returning silently:
+        // six consecutive up-taps at max once produced no feedback whatsoever,
+        // which reads as "the tap missed" rather than "you are at 31". Compared
+        // with an epsilon because these are floats off a /10 division.
+        if (fabsf(t - d.target) < 0.01f) {
+          d.errMs = millis();
+          Serial.printf("ac: already at limit %.1f (min %.1f max %.1f)\n",
+                        d.target, d.tMin, d.tMax);
+          return false;
+        }
+        kind = ACT_C_TEMP; fArg = t;
+        return true;
+      }
+      default: return false;
+    }
+  }
+
+  switch (btn) {
+    case 0: kind = ACT_L_OFF;                        return true;
+    case 1: kind = ACT_L_BRI;    iArg = BRI_LOW;      return true;
+    case 2: kind = ACT_L_BRI;    iArg = BRI_MID;      return true;
+    case 3: kind = ACT_L_BRI;    iArg = BRI_HIGH;     return true;
+    case 4: if (!d.supportsCT) return false;
+            kind = ACT_L_KELVIN; iArg = KELVIN_WARM;  return true;
+    case 5: if (!d.supportsCT) return false;
+            kind = ACT_L_KELVIN; iArg = KELVIN_COOL;  return true;
+    default: return false;
+  }
+}
+
 // Applies the expected result locally and repaints BEFORE the HTTP call, then
 // reverts if the call failed. IKEA Zigbee round-trips run 1-2s; without this
 // optimistic step every tap would feel like the screen had ignored it.
@@ -357,59 +417,7 @@ static void doAction(int16_t devIdx, int8_t btn) {
   int         iArg = 0;
   float       fArg = 0;
   const char* sArg = nullptr;
-
-  if (d.kind == DEV_CLIMATE) {
-    switch (btn) {
-      case 0: kind = ACT_C_MODE; sArg = "off";        break;
-      case 1: kind = ACT_C_MODE; sArg = AC_MODE_COOL; break;
-      case 2: kind = ACT_C_MODE; sArg = AC_MODE_DRY;  break;
-      // AC_BTN_TEMP (the slot between these two) is the setpoint READOUT and
-      // falls through to `default: return`. screenHitTest() already reports a
-      // tap there as a miss, so this is belt and braces.
-      case AC_BTN_TUP:
-      case AC_BTN_TDN: {
-        // Mirrors the chevrons' greyed-out BV_DISABLED state on screen: with
-        // the AC off there is no active setpoint to step, so a tap here is
-        // ignored the same way a swatch tap is on a bulb with !supportsCT.
-        if (strcmp(d.mode, "off") == 0) return;
-        // The steps are relative, so they cannot act until a real setpoint is
-        // known — the same rule that makes the readout show "--" until then.
-        if (!d.known || isnan(d.target)) {
-          d.errMs = millis();
-          Serial.println("ac: no setpoint known yet, ignoring step");
-          return;
-        }
-        float t = d.target + (btn == AC_BTN_TUP ? d.tStep : -d.tStep);
-        if (t < d.tMin) t = d.tMin;
-        if (t > d.tMax) t = d.tMax;
-        // Already at the limit. Flash the row instead of returning silently:
-        // six consecutive up-taps at max once produced no feedback whatsoever,
-        // which reads as "the tap missed" rather than "you are at 31". Compared
-        // with an epsilon because these are floats off a /10 division.
-        if (fabsf(t - d.target) < 0.01f) {
-          d.errMs = millis();
-          Serial.printf("ac: already at limit %.1f (min %.1f max %.1f)\n",
-                        d.target, d.tMin, d.tMax);
-          return;
-        }
-        kind = ACT_C_TEMP; fArg = t;
-        break;
-      }
-      default: return;
-    }
-  } else {
-    switch (btn) {
-      case 0: kind = ACT_L_OFF;                        break;
-      case 1: kind = ACT_L_BRI;    iArg = BRI_LOW;     break;
-      case 2: kind = ACT_L_BRI;    iArg = BRI_MID;     break;
-      case 3: kind = ACT_L_BRI;    iArg = BRI_HIGH;    break;
-      case 4: if (!d.supportsCT) return;
-              kind = ACT_L_KELVIN; iArg = KELVIN_WARM; break;
-      case 5: if (!d.supportsCT) return;
-              kind = ACT_L_KELVIN; iArg = KELVIN_COOL; break;
-      default: return;
-    }
-  }
+  if (!decodeAction(d, btn, kind, iArg, fArg, sArg)) return;
 
   // 1. optimistic local state
   switch (kind) {
@@ -510,6 +518,18 @@ static void doScene(int16_t idx) {
 }
 
 // ── settings ─────────────────────────────────────────────
+// Not table-driven: the four rows are two genuinely different shapes, not
+// four uniform arms. SET_ROW_BRI/SET_ROW_NIGHT set an index-derived value
+// from `sub` with its own bounds check; SET_ROW_SCHED/SET_ROW_FLIP are plain
+// toggles with no `sub`. A single table spanning both would need a variant
+// per row to cover the difference — that moves the complexity rather than
+// removing it. The two toggles ARE identical in shape, so those collapse
+// into toggleSetting() below.
+static void toggleSetting(bool& field, const char* key) {
+  field = !field;
+  settingsSave(key, field);
+}
+
 // Local only — no HA call, so no optimistic/rollback dance. applySettings()
 // must run BEFORE the repaint: a flip or night change alters the rotation and
 // palette the frame is drawn in, and doing it after would paint one frame in
@@ -530,14 +550,8 @@ static void doSetting(int16_t row, int8_t sub) {
       settingsSave(K_NIGHT, S.set.nightMode);
       break;
     }
-    case SET_ROW_SCHED:
-      S.set.nightSched = !S.set.nightSched;
-      settingsSave(K_SCHED, S.set.nightSched);
-      break;
-    case SET_ROW_FLIP:
-      S.set.flip = !S.set.flip;
-      settingsSave(K_FLIP, S.set.flip);
-      break;
+    case SET_ROW_SCHED: toggleSetting(S.set.nightSched, K_SCHED); break;
+    case SET_ROW_FLIP:  toggleSetting(S.set.flip,       K_FLIP);  break;
     default: return;
   }
   applySettings();
@@ -546,14 +560,19 @@ static void doSetting(int16_t row, int8_t sub) {
 
 // ── touch ────────────────────────────────────────────────
 
-static void handleTouch() {
+// Gate, read, flip-mirror, debug-log and debounce — everything about getting
+// ONE new tap's coordinates out of the digitiser. Returns false whenever
+// there is nothing new to dispatch this pass (nothing touching, a rejected
+// sample, a held finger, or too soon after the last tap); outX/outY are only
+// meaningful when it returns true.
+static bool sampleTouch(int16_t& outX, int16_t& outY) {
   static uint32_t lastTap = 0, lastDbg = 0, lastPoll = 0;
   static bool     wasDown = false;
 
   // A finger tap holds contact far longer than TOUCH_POLL_MS, so sampling at
   // 20 Hz instead of every pass halves the bit-bang cost for free.
   uint32_t pollNow = millis();
-  if (pollNow - lastPoll < TOUCH_POLL_MS) return;
+  if (pollNow - lastPoll < TOUCH_POLL_MS) return false;
   lastPoll = pollNow;
 
   // Cheaper still: skip the read entirely when idle. PENIRQ already has to
@@ -568,7 +587,7 @@ static void handleTouch() {
   // bit-bang and is what actually decides whether a tap is accepted.
   if (digitalRead(PIN_TOUCH_IRQ) == HIGH && pollNow - lastDbg < 5000) {
     wasDown = false;
-    return;
+    return false;
   }
 
   int16_t  x = -1, y = -1;
@@ -621,19 +640,25 @@ static void handleTouch() {
   }
 
   // edge-trigger on press so a held finger doesn't spam HA service calls
-  if (!ok) { wasDown = false; return; }
-  if (wasDown) return;
-  if (now - lastTap < TOUCH_TAP_MS) return;
+  if (!ok) { wasDown = false; return false; }
+  if (wasDown) return false;
+  if (now - lastTap < TOUCH_TAP_MS) return false;
   wasDown = true;
   lastTap = now;
 
-  Hit h = screenHitTest(x, y);
+  outX = x;
+  outY = y;
+  return true;
+}
+
+// The 5-case dispatch, plus the press-flash bookkeeping every case shares.
+static void dispatchHit(Hit h) {
   if (h.kind == HIT_NONE) return;
 
   S.pressKind = h.kind;
   S.pressIdx  = h.idx;
   S.pressSub  = h.sub;
-  S.pressMs   = now;
+  S.pressMs   = millis();
 
   switch (h.kind) {
     case HIT_TAB:
@@ -674,6 +699,12 @@ static void handleTouch() {
     default:
       break;
   }
+}
+
+static void handleTouch() {
+  int16_t x, y;
+  if (!sampleTouch(x, y)) return;
+  dispatchHit(screenHitTest(x, y));
 }
 
 // ── networking ───────────────────────────────────────────
@@ -750,12 +781,11 @@ static void setupWifi() {
 
 // Logs the wall clock once, the first time SNTP produces a valid time. Exists so
 // the timezone can actually be verified against a known-good source rather than
-// assumed correct.
-static void logClockOnce() {
+// assumed correct. `timeValid`/`lt`: loop()'s single getLocalTime() reading —
+// see its comment — rather than a second call here.
+static void logClockOnce(bool timeValid, const struct tm& lt) {
   static bool done = false;
-  if (done) return;
-  struct tm lt;
-  if (!getLocalTime(&lt, 0)) return;
+  if (done || !timeValid) return;
   done = true;
 
   // Log local AND UTC so the offset is self-evident: Asia/Bangkok must read
@@ -964,14 +994,26 @@ void setup() {
 void loop() {
   updateNetState();
   if (S.netState == 1) servicePoll();
+
+  // Read once, use everywhere this pass needs it. serviceNightSchedule(),
+  // serviceDailyRestart(), the header's clock (screenSetClock()) and
+  // logClockOnce() each used to call getLocalTime() independently — up to 4
+  // calls a pass for a value that cannot change within one. Zero timeout:
+  // must never block, and reports false until SNTP lands.
+  struct tm localTm;
+  const bool timeValid = getLocalTime(&localTm, 0);
+  const int16_t hhmm = timeValid
+      ? (int16_t)(localTm.tm_hour * 60 + localTm.tm_min) : -1;
+  screenSetClock(hhmm);
+
   // Before handleTouch() so a scheduled flip lands before the tap that follows
-  // it is mapped. All four calls are memoised no-ops when nothing changed.
-  serviceNightSchedule();
-  serviceDailyRestart();
+  // it is mapped. All memoised no-ops when nothing changed.
+  serviceNightSchedule(hhmm);
+  serviceDailyRestart(hhmm);
   applySettings();
   handleTouch();
   screenRender();
-  logClockOnce();
+  logClockOnce(timeValid, localTm);
   logHeap();
   delay(20);
 }
