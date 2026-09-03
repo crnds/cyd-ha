@@ -169,10 +169,20 @@ Three things about it are load-bearing, not conveniences:
   drop to the alt label or `F_MICRO`). On the **header's room-reading region**
   (the AC's live temperature/humidity, relocated there from its card — see
   `STATUS_ROOM_W`): that the worst *realistic* string (`"27"` + ring +
-  `"99%"` + `"/"` — not `"100%"`, which an indoor bedroom sensor doesn't
-  read) still fits the region's reserved budget, the same kind of check the
-  AC's identity column needed before the reading moved. It also asserts the
-  night palette's red ladder is collision-free (see "Night mode").
+  `"99"` + a small `"%"` — not `"100"`, which an indoor bedroom sensor doesn't
+  read) still fits the region's reserved budget and still leaves the deliberate
+  gap before the clock, the same kind of check the AC's identity column needed
+  before the reading moved; that the clock fits its own region in `F_NUM`,
+  **including the `"--:--"` placeholder the browser's live clock never
+  produces**; and that `F_NUM`'s ink envelope stays inside the header band at
+  all, which only became a question when these regions went up a size. On the
+  **connectivity
+  banner**: that it sits wholly inside the row band it clears (anything
+  hanging out would be drawn over pixels nothing cleared — the fragment
+  problem the band-clear exists to fix), that it stops short of the scene
+  scroll gutter, and that `"No Connection"` still fits its 106px budget. It
+  also asserts the night palette's red ladder is collision-free (see "Night
+  mode").
 - **State is deep-linkable** — `?page=1&night=1&scenes=100&stale=1&ha=0&mode=heat`
   and so on, listed at the bottom of the file. That is what makes a specific case
   reproducible, and it is how the design was reviewed:
@@ -205,7 +215,7 @@ change has exactly one correct home:
 | `src/ui/gfx.h/.cpp` | the `TFT_eSPI` handle, 4 type roles, fitted/truncated text | **only `src/ui/*` may include it** |
 | `include/config.h` LAYOUT | spacing scale, radii, every rect | `simulator.html` mirrors this |
 | `src/ui/widgets.cpp` | card, chip, swatch, toggle, stepper, value, tab, pip | one `vis` byte in, pixels out |
-| `src/ui/icons.cpp` | 10 primitive-drawn glyphs on one 15×15 grid | no bitmaps, no decoration |
+| `src/ui/icons.cpp` | 9 primitive-drawn glyphs on one 15×15 grid | no bitmaps, no decoration |
 
 **Geometry is in `config.h` and not in `theme.h`, on purpose.** Splitting the
 tokens across two files looks like a wart until you remember `simulator.html`
@@ -244,11 +254,20 @@ yellow collapses onto `WARM`'s amber under Night Shift's blanket scaling, so
 `C_BRI`'s shift value is a hand-picked, green-boosted override instead.
 
 **Type is four roles over TFT_eSPI's built-in BITMAP faces**, selected by number
-in `gfx.cpp`: `F_NUM` (Font 4, 26px box, the AC setpoint alone), `F_TITLE` and
+in `gfx.cpp`: `F_NUM` (Font 4, 26px box, **live numeric readouts** — the AC
+setpoint plus the header's room temperature/humidity and clock), `F_TITLE` and
 `F_BODY` (both Font 2, 16px box), `F_MICRO` (Font 1 / GLCD 6×8, last-resort fit
-only). These are drawn pixel by pixel at one fixed size, so every stem lands on
-the grid and nothing is scaled or resampled at draw time — which is the whole
-point, and why the FreeSans GFX faces this used to carry are gone.
+plus the tab bar). These are drawn pixel by pixel at one fixed size, so every stem
+lands on the grid and nothing is scaled or resampled at draw time — which is the
+whole point, and why the FreeSans GFX faces this used to carry are gone.
+
+**`F_NUM` was the AC setpoint ALONE until the header's numbers were bumped up to
+it** on request. Two consequences worth keeping: the role now means "a number read
+at a glance" rather than "the number being adjusted", so a label or caption still
+must not ask for it; and the setpoint lost its claim to being the largest thing on
+the panel. It still reads as the Devices page's emphasis, but because of where it
+sits — on a card, between the two chevrons that change it — not because nothing
+else is as big.
 
 **This was a deliberate swap, on request, away from the proportional FreeSans
 build.** Do not "restore" it as a legibility fix without re-reading the trades
@@ -258,20 +277,32 @@ below; three of them are worse than they were, and that was the accepted price.
   the whole title-vs-state hierarchy now rests on **colour tier alone** (`C_TEXT`
   vs `C_TEXT2`/`C_TEXT3`); the weight signal that used to carry half of it does
   not exist. Do not "fix" this by promoting titles to Font 4 — at 18px caps it
-  does not fit `CARD_L1_H`, and a card title larger than the AC setpoint inverts
-  the page's one intended emphasis.
+  does not fit `CARD_L1_H`, and a card title as large as the AC setpoint inverts
+  the emphasis of the row it sits on.
 - **Body text is smaller than it was: 10px caps against FreeSans' 13px.** That is
   the cost of the pixel grid. It also squeezes the fallback ladder — `F_MICRO` is
   only 3px shorter than `F_BODY` now, so a `textFit()` fallback is far less
   visible than it used to be and correspondingly less of a warning.
-- **The ladder has a hole.** There is nothing between Font 2 (10px caps) and
-  Font 4 (18px caps), so `F_NUM` is the only step above body text and a settings
-  caption is necessarily the same size as its title. Same constraint as before,
-  different numbers.
+- **The ladder has a hole, and it is expensive.** There is nothing between Font 2
+  (10px caps) and Font 4 (18px caps) — TFT_eSPI has no Font 3 or Font 5 at all,
+  their `fontdata[]` slots are null placeholders — so `F_NUM` is the only step
+  above body text and a settings caption is necessarily the same size as its
+  title. The consequence when something *is* bumped a size: it costs **1.8× the
+  width**, not a nudge. `"23:45"` goes 35px → 63px and `%` goes 9px → 21px. That
+  is why the header could only afford it for two regions after a glyph was deleted
+  and `TAB_GAP` cut twice, and why its `%` had to stay behind at `F_TITLE`.
+- **Mixing two roles on one line needs `fontBaseline()`.** An M\* datum centres
+  each role on its *own* box, so the same `cy` does not put two roles on the same
+  baseline — the difference of two `fontBaseline()` entries is the correction.
+  `drawStatusRoom()` is the one caller (its small `%` after big digits). Don't
+  reach for `fontInkBottom()` instead: that is an envelope including descenders,
+  so on glyphs that have none it aligns the wrong row.
 - **Font 2 is appreciably narrower**, which is the one thing that got easier:
-  "Settings" went 65px → 49px, `"COOL"` 51px → 31px, the clock 44px → 35px, and
-  the default 14-character device names went ~151px → ~104px. Several comments in
-  `config.h` that read "X only just fits" now describe slack; they say so.
+  "Settings" went 65px → 49px, `"COOL"` 51px → 31px, and the default 14-character
+  device names went ~151px → ~104px. (The clock went 44px → 35px too, and has
+  since gone to 63px by moving up to `F_NUM` — that is a role change, not the face
+  swap.) Several comments in `config.h` that read "X only just fits" now describe
+  slack; they say so.
 - **Ink is NOT centred in the box TFT_eSPI positions.** A built-in glyph sits
   inset by blank rows, by a different amount top and bottom, and `drawString`
   centres an M\* datum on the *full box* where it centred a free font on its
@@ -520,53 +551,73 @@ adding a scene is one line and nothing else. There is deliberately **no
 
 **Rendering** (`src/ui/screen.cpp`) is **dirty-region based**. `screenRender()`
 runs every loop pass, dispatches on `S.page`, and repaints only what changed:
-- The **header** is four independent regions (connectivity glyph / tabs / room
-  reading / clock) that **tile it exactly** — the tiling is enforced by
-  construction (`TAB_STRIP_W` is *derived* from the other three, so there is
-  nothing left for a `static_assert` to catch), because a gap leaves pixels
-  nothing ever clears and an overlap is just as bad, since each region only
-  clears its own rect. The room-reading region is the newest of the four — the
-  AC's live temperature and humidity, moved here from its own card on request
-  (see `STATUS_ROOM_W` in `config.h` and `drawStatusRoom()`) so the reading is
-  visible on every page, not just Devices. It repaints on its own compare
-  (room string, humidity string, resolved colour), independently of the tabs
-  and the clock, the same "compare by rendered appearance" rule every other
-  region already follows. Its temperature and humidity are `F_TITLE`, not
-  `F_MICRO` — bumped a size on request to match the clock they sit beside,
-  which is what this region cost `TAB_GAP` to afford (18px → 12px, still on
-  the `SP_*` scale at `SP_3`). The `/` separator stayed `F_MICRO`: it is
-  punctuation, not data, so it stays quiet between two same-size numbers
-  rather than becoming a third one. Its humidity budget is 2 digits
-  (`"99%"`), not 3 (`"100%"`) — an indoor, air-conditioned bedroom sensor
-  doesn't read 100% relative humidity, so padding for that ceiling was the
-  same realistic-vs-possible error the temperature side (2 digits, not
-  `ha.cpp`'s full -10..60C sanity band) already knew to avoid, corrected here
-  on request. That correction, not a further cut to `TAB_GAP`, is what
-  finally let the gap before the clock shrink to nothing: `drawStatusRoom()`
-  adds no gap of its own after the `/`, so the whole trailing gap is just
-  however much of `STATUS_ROOM_W` the content doesn't spend, and the freed
-  pixels from the humidity fix are what let that reach zero.
+- The **header** is three independent regions (tabs / room reading / clock) that
+  **tile it exactly** — the tiling is enforced by construction (`TAB_STRIP_W` is
+  *derived* from the other two plus `TAB_X0`, so there is nothing left for a
+  `static_assert` to catch), because a gap leaves pixels nothing ever clears and
+  an overlap is just as bad, since each region only clears its own rect. There
+  used to be a fourth, a 26px connectivity glyph at x 0..25, and `TAB_X0` began
+  after it at 26; it is gone (see the connectivity banner below) and `TAB_X0` is
+  0. The split is now **171 + 80 + 69 = 320**: the glyph's 26px did *not* stay
+  with the tabs, it landed in `TAB_STRIP_W`'s derived width as slack and has since
+  been spent — with another 8px from `TAB_GAP` — on making the two number regions
+  a size bigger. The tabs are flush left and use 166px of their 171, leaving 5px
+  before the room reading.
+
+  **Both number regions are `F_NUM` now**, up a size on request. That is a
+  1.8× width jump, not a nudge (see the ladder-hole note above), and it is the
+  whole reason the budget is this tight. Three parts of it are load-bearing:
+  - **The `%` stayed `F_TITLE`.** At `F_NUM` it is 21px against 9px — width this
+    region does not have, and the pair would not have fitted at all. It is a unit
+    marker rather than data, the same argument that used to keep the `/` quiet, and
+    it is drawn **baseline-aligned** to the big digits via `fontBaseline()`, not at
+    the same `cy`, or it would float mid-height and read as a smaller number.
+  - **The degree ring stayed a 2px circle** with a 5px advance. `wValue()` already
+    draws exactly that ring beside the AC setpoint's `F_NUM` digits, so scaling
+    this one with the font would make the two disagree.
+  - **The trailing `/` is gone.** At `F_MICRO` beside 18px digits it read as
+    vestigial, and the 6px `STATUS_ROOM_W` leaves over now does the separating.
+    That 6px is **deliberate**, which reverses the old "zero leftover" note — it is
+    the gap before the clock, not slack, so don't spend it.
+
+  The room region repaints on its own compare (room string, humidity string,
+  resolved colour), independently of the tabs and the clock, the same "compare by
+  rendered appearance" rule every other region follows. Its humidity budget is
+  still 2 digits, not 3 (`"100%"`) — an indoor, air-conditioned bedroom sensor
+  doesn't read 100% relative humidity, the same realistic-vs-possible judgement
+  the temperature side (2 digits, not `ha.cpp`'s full -10..60C band) already made.
+  A reading that *does* exceed it spills right, into the clock, and costs more
+  than it used to: `"100"` is 14px wider at `F_NUM` than at `F_TITLE`. Still
+  accepted, and still self-healing — `drawStatusRoom()` clears only its own rect,
+  so a stray pixel sits there until the clock's next per-minute repaint clears
+  that whole region. Worst case a 59-second-old artifact.
 
   The clock repaints once a minute, which is invisible. It replaced a
   freshness readout that counted seconds since `haOkMs` — and since every poll
   resets that timestamp, the number oscillated `0↔1` and repainted the full bar
   several times a second. **Don't put any per-second value here**; that region is
-  minute-rate by design. Connection health belongs to the glyph, and staleness to
-  the card dimming, not to this readout. **The clock is exactly 5 characters** —
-  "23:45" is 35px in `F_TITLE` against the 41px this region now leaves (it was
-  51px, ~10px of it unused slack, before the room reading moved in beside it),
-  so anything wider spills into the room region, which only repaints on its own
-  compare, making the overflow permanent. There is now a 6px right margin and
-  **zero px of left slack** — tighter than the ~10px it had, and tighter than
-  the "1px from failing" FreeSans-era version ever needed to be, because the
-  room region's own budget is what absorbed the header's shrinking margin
-  instead.
+  minute-rate by design. Connection health belongs to the banner below, and
+  staleness to the card dimming, not to this readout. **The clock is exactly 5
+  characters** — `"23:45"` is 63px in `F_NUM` against the 69px this region now
+  leaves (it was 35px of 41 at `F_TITLE`, and 51px before the room reading arrived
+  beside it), so anything wider spills into the room region, which only repaints
+  on its own compare, making *that* overflow permanent. The margins are what they
+  always were: a 6px right margin and **zero px of left slack**. `"--:--"` is
+  39px, comfortably narrower, as it has always been.
+
+  **Vertical fit stopped being free when these went to `F_NUM`** and is worth
+  re-checking if either moves again: its box is 26px against `F_TITLE`'s 16, in a
+  31px band, and `ROLE_DY` seats it 4px low. The ink envelope lands at y 216..239
+  inside the band's 209..239 — it fits, but the bottom is exactly the last screen
+  row, and only because the glyphs actually drawn (digits, `:`, `-`, `%`) have no
+  descenders. `simulator.html` checks the envelope; there is no `static_assert`
+  for it, because the ink tables live in `gfx.cpp` as non-`constexpr` arrays.
 - **The current tab is an underline, not a filled pill.** A pill spent the
   solid-accent fill — the mark that means "selected" on a chip — on the one strip
   that navigates rather than acts, so the header read as a fourth row of buttons.
   `wTab()` now draws the label plus a 2px `C_ACCENT` bar seated on the selected
   one, and selection carries **two** signals (`C_TEXT` vs `C_TEXT3` *and* the
-  bar), so it survives the night palette the same way the connectivity glyph
+  bar), so it survives the night palette the same way the connectivity banner
   does. Three things about it are load-bearing: the bar is flush with the **TOP
   of the rect `drawTab()` passes**, which is the cell's clear rect, so it lands
   on the first row below the 1px rule and the two read as one line — one row
@@ -582,12 +633,54 @@ runs every loop pass, dispatches on `S.page`, and repaints only what changed:
   "Settings"' ink starts well clear of the bar even at this tight a margin;
   `simulator.html` asserts that clearance, the seating identity, and that every
   label still fits its cell.
-- **The connectivity glyph replaced two labelled dots reading "WIFI" and "HA"** —
-  permanent debug chrome spending 88px to tell a healthy system it was healthy.
-  Now: both up → 3 bars in `C_TEXT3`; HA down → 3 bars plus an amber badge; Wi-Fi
-  down → 0 bars, all red. **Colour AND a shape/badge change, never colour alone**,
-  because the palette collapses to red at night and "is it working" has to survive
-  that. The `HA` label's diagnostic value is not lost — it is in the serial log.
+- **Connectivity is a BANNER IN THE BODY now, not a glyph in the header.**
+  `drawNoConn()` draws `"No Connection"` over row band 0 while HA is
+  unreachable, and nothing at all when it is reachable. This replaced a 26px
+  wifi-bars glyph in the header's left corner (which had itself replaced two
+  labelled dots reading `WIFI`/`HA`, 88px of permanent debug chrome telling a
+  healthy system it was healthy). The glyph was removed on request once the
+  header moved to the bottom edge and it became a bottom-left-corner ornament;
+  `icoWifi`/`icoBadge` went with it, since nothing else used them. Five things
+  about the replacement are load-bearing:
+  - **It is gated on `!S.haOk` ALONE**, so it says *that* the link is down and
+    not *which end*. The glyph distinguished Wi-Fi-down (0 bars, red) from
+    HA-down (3 bars + amber badge); that is deliberately dropped.
+    `updateNetState()` already forces `S.haOk` false whenever Wi-Fi drops, so
+    one bit covers both causes, and it is the bit that matters to someone at
+    the panel: nothing they tap will work. The finer diagnosis is in the serial
+    log — the same trade that retired the `WIFI`/`HA` labels.
+  - **It IS the body, so it must occlude a page.** The header has no room: three
+    regions tile that bar exactly and each clears only its own rect. Occluding
+    is the point, since the fault is not page-specific.
+  - **It CLEARS ITS WHOLE ROW BAND FIRST, and that is what makes it read as an
+    overlay rather than as a clipping bug.** Painted straight on top it leaves
+    fragments of whatever it didn't quite cover — the first attempt left the
+    bottom of a yellow brightness chip poking out under its border on Devices,
+    and a 2px cyan sliver on Settings, whose STACKED card puts its controls 2px
+    lower than an inline device card does. **The clear is the CURRENT PAGE's
+    first row**, not one fixed rect: the two grids don't share a pitch, so a
+    52px row band leaves 12px of a 64px scene tile showing. On Scenes it also
+    **stops at `SCENE_SB_X0`** — the scroll gutter is its own region on its own
+    compare, and clearing across it erased the up arrow with nothing to put it
+    back.
+  - **Every page SKIPS its first row while the banner shows** (`noConnShown()`).
+    The banner draws *last*, so anything a page paints in that band on a later
+    pass lands on top of it, and no page's compare would ever put it back —
+    `drawNoConn()`'s own compare only tracks whether the banner should be shown,
+    not whether something scribbled on it. Two real cases: a scene scroll
+    repaints every visible tile, and a device card's stale/err transition
+    repaints inside band 0 by itself. The skipped rows' snapshots go stale
+    meanwhile, which is safe because the hide path is a full
+    `screenInvalidate()`. Note the one thing this costs: Settings' brightness
+    row is row 0, so it is hidden while HA is down even though it still works
+    (no Settings row touches HA). The other three rows still draw.
+  - **The hide path is `screenInvalidate()` with NO `fillScreen()`.** The banner
+    sits on top of content already cached as clean, so clearing to `C_BG` would
+    leave a banner-shaped hole; `fillScreen()` would fix that and flash the whole
+    panel for a frame to remove a 114×26 box. `screenInvalidate()` writes no
+    pixels — it drops every snapshot so the next `screenRender()` runs
+    `bodyReset()` and redraws the body properly, the same one-frame (~20ms) lag
+    night mode and screen flip already accept.
 - Each **card's identity** (icon + name) is **one** region compared by its
   rendered string *and* by the icon's resolved shape and colour. The icon has
   to be in that compare, and on every card it is doing real work no string
@@ -674,10 +767,13 @@ first.** `textAt()` uses the one-argument `setTextColor()`, which sets the
 background to the same colour and thereby selects TFT_eSPI's transparent glyph
 path for both the Font 2 bitmap and the Font 4 RLE decoder. That is not merely
 inherited from the old GFX behaviour — it is now required: with `ROLE_DY` applied,
-Font 4's 26px box is *taller* than the 26px control row it sits in and reaches the
-last screen line on the AC row, so an opaque draw would overdraw its neighbours.
-The row separator sits at `top - 2`, outside every clear rect, so it is painted
-once.
+Font 4's 26px box is seated 4px low, so it **overhangs whatever band it sits in**
+and an opaque draw would overdraw the neighbours. Two live cases: the AC setpoint,
+whose box busts its 26px `CTL_H` row by 4px top and bottom, and the header's clock
+and room reading, whose box reaches y 240 — one row past the last screen line.
+Both are harmless *only* because the draw is transparent and Font 4's deepest
+possible ink is row 239. The row separator sits at `top - 2`, outside every clear
+rect, so it is painted once.
 
 **Night mode** recolours the whole UI in place, so `src/ui/theme.h`'s palette is
 **runtime values, not `#define`s** — the `C_*` names are now array slots into
@@ -882,10 +978,11 @@ Two more rendering details worth keeping:
   `screen.h`.
 
 **Layout** lives entirely in the LAYOUT block of `include/config.h`. Rows are
-`ROWS_Y0 + i*ROW_H`; **0 + 4 × 52 = 208 exactly = `STATUS_Y0`**, and the header
-tiles as **26 + 3 × 81 + 51 = 320 exactly** in x. Both are `static_assert`ed in
-`screen.cpp`. Change those `#define`s together, not the arithmetic in
-`screen.cpp`.
+`ROWS_Y0 + i*ROW_H`; **0 + 4 × 52 = 208 exactly = `STATUS_Y0`**, and that one IS
+`static_assert`ed in `screen.cpp`. The header tiles as **219 + 60 + 41 = 320
+exactly** in x, but has no assert and needs none: `TAB_STRIP_W` is *derived* as
+`SCR_W - STATUS_ROOM_W - STATUS_CLK_W - TAB_X0`, so it cannot fail to sum.
+Change those `#define`s together, not the arithmetic in `screen.cpp`.
 
 **The header is anchored to the BOTTOM edge (y 208..239), not the top — moved
 there on request, not discovered there.** `STATUS_Y0` (`SCR_H - STATUS_H`) is

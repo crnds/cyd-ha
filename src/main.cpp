@@ -684,7 +684,11 @@ static void updateNetState() {
   S.netState = up ? 1 : 2;
 
   // servicePoll() is skipped while Wi-Fi is down, so nothing else would ever
-  // clear haOk — the bar showed WIFI red beside HA green, which hid the fault.
+  // clear haOk. This one line is what lets the whole UI express connectivity as
+  // a single bit: drawNoConn()'s "No Connection" banner gates on !S.haOk alone
+  // and is correct for a Wi-Fi drop as well as an HA outage only because of it.
+  // Originally it fixed the same fault in the old two-dot bar, which showed WIFI
+  // red beside HA green and so hid the failure it was there to report.
   if (!up) S.haOk = false;
 
   if (!up && millis() - lastTry > 5000) {

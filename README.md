@@ -131,12 +131,14 @@ It reads `--:--` for the second or two before the first sync lands. Change the
 zone via `TZ_INFO` in `include/config.h`; the POSIX sign is inverted, so
 `"ICT-7"` means UTC**+**7.
 
-Connection health is the single glyph at top left, not the clock. When everything
-is reachable it is three quiet grey bars; if Home Assistant stops answering it
-gains an amber badge; if Wi-Fi drops it goes to red with no bars. Individual cards
-dim when their own data goes stale, and a card whose last command *failed* flashes
-a red border. Nothing turns a colour without also changing shape or badge, so the
-readout survives night mode, which is red-only by design.
+Connection health shows up only when there is nothing good to report: if Home
+Assistant becomes unreachable, a red **No Connection** banner takes over the top
+row on whichever page you are on, and while everything is working it costs no
+pixels at all. It does not distinguish "Wi-Fi is down" from "Home Assistant is
+not answering" — either way nothing you tap will reach the house, and the serial
+log has the detail if you want it. Individual cards dim when their own data goes
+stale, and a card whose last command *failed* flashes a red border. It is a word
+rather than a colour, so it survives night mode, which is red-only by design.
 
 The currently-active state is filled in Home Assistant cyan, and it is the only
 saturated colour on a resting screen — if everything is highlighted, nothing is.

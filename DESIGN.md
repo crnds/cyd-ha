@@ -190,10 +190,21 @@ Roles, not sizes — a component asks for the job the text is doing:
 
 | Role | Face | Ink (rel. `cy`) | Baseline | Cap | Used for |
 |---|---|---|---|---|---|
-| `F_NUM` | Font 4 (26px box) | −8 … +15 | +10 | 18 | The AC setpoint, alone. The one number being adjusted, and deliberately the largest thing in the body |
-| `F_TITLE` | Font 2 (16px box) | −5 … +7 | +5 | 10 | Card titles, scene names, the clock |
-| `F_BODY` | Font 2 (16px box) | −5 … +7 | +5 | 10 | Live state, chip labels, tab labels, captions |
-| `F_MICRO` | Font 1, GLCD 6×8 | −4 … +3 | +3 | 7 | Last-resort fit only, never a first choice |
+| `F_NUM` | Font 4 (26px box) | −8 … +15 | +10 | 18 | Live numeric readouts: the AC setpoint, and the header's room temperature/humidity and clock |
+| `F_TITLE` | Font 2 (16px box) | −5 … +7 | +5 | 10 | Card titles, scene names; a unit marker beside `F_NUM` digits (the header's `%`) |
+| `F_BODY` | Font 2 (16px box) | −5 … +7 | +5 | 10 | Live state, chip labels, captions |
+| `F_MICRO` | Font 1, GLCD 6×8 | −4 … +3 | +3 | 7 | Last-resort fit; also the tab labels, on request |
+
+`F_NUM` was **the AC setpoint alone** until the header's two number regions were
+bumped up to it. The role widened from "the one number being adjusted" to "numbers
+read at a glance", and the setpoint stopped being the largest thing on the panel —
+it still carries the Devices page because of where it sits, between the two
+chevrons that change it, not because nothing else is as big.
+
+**Mixing two roles on one line needs the baseline column above.** An M\* datum
+centres each role on its *own* box, so one `cy` does not give two roles one
+baseline; the difference of two `Baseline` entries is the correction, exposed as
+`fontBaseline()`. The header's small `%` after big digits is the only caller.
 
 **Ink extents are measured, not read off the font headers.** The headers give the
 nominal box (Font 2: 16 tall, baseline 13; Font 4: 26 tall, baseline 19), but
@@ -247,9 +258,10 @@ derived from these; re-run the script rather than adjusting by eye.
 | Widths | wider | narrower, so every fit budget gained slack |
 | Edges | stair-stepped outlines | on the pixel grid by construction |
 
-Font 4 carries a full 96-character set for a role that only ever draws two digits
-and `--`; that is where the extra flash goes, and it is the thing to trim first if
-flash ever matters — not the face choice.
+Font 4 carries a full 96-character set for a role that draws digits, `:`, `-` and
+`%`; that is where the extra flash goes, and it is the thing to trim first if flash
+ever matters — not the face choice. (It earns a little more of its keep than it
+used to: the role now serves three readouts rather than one.)
 
 ### 4.3 Measured widths that decided a layout
 
@@ -260,7 +272,7 @@ constant has the value it has, and because a future face could tighten them agai
 | String | Role | Was | Now | Consequence |
 |---|---|---|---|---|
 | `"Settings"` | `F_BODY` | 65 | 49 | Set `TAB_W` to 81. Now fixed by header tiling instead |
-| `"23:45"` | `F_TITLE` | 44 | 35 | `STATUS_CLK_W` 51 with a 6px right margin — was 1px of slack, now 10 |
+| `"23:45"` | `F_TITLE` | 44 | 35 | Set `STATUS_CLK_W` 51, then 41. Since moved to `F_NUM` at **63px**, and the region to 69 — always a 6px right margin and zero left slack |
 | `"COOL"` | `F_BODY` | 51 | 31 | Set `ACM_W` to 60. Now fixed by the card's 288px tiling instead |
 | `"OFFLINE"` vs `"UNAVAILABLE"` | `F_BODY` | 75 / 122 | 51 / 82 | Chose the shorter word so a 14-char name is not truncated |
 | `"TRADFRI BULB 1"` | `F_TITLE` | 151 | 103 | Fits every default state with room; longer names truncate |
@@ -276,7 +288,7 @@ sixth value is a sign the layout is wrong, not that the scale is.**
 
 ```
 SP_1  4     control gaps, card inset
-SP_2  8     screen margins, card padding, label padding
+SP_2  8     screen margins, card padding, label padding, tab gap
 SP_3  12    scene grid columns
 SP_4  16    splash pip spacing
 SP_6  24    scrollbar track inset
@@ -334,12 +346,16 @@ chevrons).
 | `icoBulb` | A bulb's live state — filled in its real colour temperature, or a hollow outline when off |
 | `icoSnow` / `icoDrop` / `icoPower` | The AC's live mode: cooling, drying, off-or-unusual |
 | `icoSun` / `icoMoon` / `icoClock` / `icoRotate` | The four settings, which are otherwise four identical rows of text and a toggle |
-| `icoWifi` | The entire connectivity readout, 0 or 3 bars |
 | `icoChevron` | Direction, in the setpoint stepper and the scroll gutter |
-| `icoBadge` | An overlay dot on another glyph — the HA-down badge |
 
 `icoMoon` takes the colour **behind** it: a crescent is a disc minus a disc, and
 with no alpha the bite must be painted in the card's own fill.
+
+There were two more, `icoWifi` (the connectivity readout, 0 or 3 bars) and
+`icoBadge` (an overlay dot on another glyph — the HA-down badge). Both were
+deleted when connectivity moved out of the header and became a text banner in
+the body (§11.1a). The rule at the top of this section is why: an icon that
+stops carrying state does not stay in the set as decoration.
 
 ---
 
@@ -440,22 +456,28 @@ failure that file exists to catch.
 Nothing in `screen.cpp` computes a position from a literal. Change the `#define`s
 together, never the arithmetic.
 
-### 9.1 Header — y 0..31
+### 9.1 Header — y 208..239
 
 Three regions that **tile the bar exactly**. A gap leaves pixels nothing ever
 clears; an overlap is just as bad, since each region only clears its own rect.
 
 ```
-26 + 3 × 81 + 51 = 320
-│    │          └── clock,    x 269..319
-│    └───────────── tabs,     x  26..268
-└────────────────── wifi,     x   0..25
-divider at y=31; every region clears 31px tall, so the rule survives and is painted once
+171 + 80 + 69 = 320
+│     │    └── clock,  x 251..319   "23:45" 63px + 6px right margin, F_NUM
+│     └─────── room,   x 171..250   74px of content + 6px gap, F_NUM (+ small %)
+└───────────── tabs,   x   0..170   166px of content, flush left, 5px trailing
+divider at y=208; every region clears 31px tall, so the rule survives and is painted once
 ```
 
-32px, up from 22. The rows paid 2px each, which buys the tab targets a third more
-height in the *worst* band of the panel and buys the header room for a full-size
-clock rather than a cramped one.
+`TAB_STRIP_W` is **derived** (`SCR_W - STATUS_ROOM_W - STATUS_CLK_W - TAB_X0`), so
+the tiling cannot fail to sum and there is nothing for a `static_assert` to catch.
+What can still go wrong — labels or readings outgrowing their region — is checked
+at runtime in `simulator.html`.
+
+The header is anchored to the **bottom** edge, not the top, and is 32px, up from
+22. The rows paid 2px each for that height, which buys the tab targets a third
+more height in the *worst* band of the panel and buys the header room for
+full-size numbers.
 
 **A bottom tab bar was considered and rejected.** It would fix the accuracy
 problem outright (the accurate, *interpolated* band), but costs ~36px of body,
@@ -610,28 +632,70 @@ the 6×8 GLCD font, a clock on the right.
   accurate* region of the panel.
 - ALL-CAPS 6px labels: shouty and hard to read at a glance.
 
-**After.** 32px. One 26px connectivity glyph; three sentence-case tab labels in
-`F_BODY` in 81px pills; a `F_TITLE` clock.
+**After.** 32px, three regions tiling it exactly (171 + 80 + 69): flush-left
+content-fit sentence-case tab labels in `F_MICRO`, then the AC's room reading and
+the clock, both in `F_NUM`.
 
-**The connectivity glyph** is the whole readout in 26px:
+**The two number regions ended up the LOUDEST thing in the bar, and the tab
+labels the quietest** — which is the inverse of where this section started, and it
+is deliberate. The tabs navigate; they are used a few times a day and their job is
+done as soon as you can read which one is current. The temperature and the time
+are what the panel is glanced at for from across a dark room. Spending the header's
+recovered space on them, and leaving the labels at the smallest face in the build,
+follows from that.
 
-| State | Rendering |
-|---|---|
-| Everything reachable | 3 bars in `C_TEXT3` — present, unobtrusive, reassuring |
-| HA not answering | 3 bars **plus an amber badge** |
-| Wi-Fi down | **0 bars**, all in `C_ERROR` |
+Getting there took every pixel the header had spare: the deleted connectivity
+glyph's 26px, `TAB_GAP` cut twice (18 → 12 → 8), and the tab strip going flush
+left. There is no size between Font 2 and Font 4, so the bump cost **1.8× the
+width** — `"23:45"` 35px → 63px — and even then the `%` had to stay a size down
+(21px → 9px) for the pair to fit at all.
 
-Colour *and* a shape/badge change every time, never colour alone. The `HA` label's
-diagnostic value is not lost — it is in the serial log.
+**The 88px of connectivity chrome is now zero px.** It first became a 26px
+wifi-bars glyph with a three-state readout (3 bars quiet / 3 bars + amber badge
+for HA-down / 0 bars red for Wi-Fi-down). That glyph has since been deleted too,
+and connectivity now costs **nothing at all** when everything is working — see
+§11.1a. The end state of the argument that opened this section: chrome that only
+ever tells a healthy system it is healthy should not exist, and 26px is no more
+defensible than 88px once the alternative is 0.
 
-**The clock is exactly 5 characters, and that is a hard rule.** `"23:45"` is 44px
-in `F_TITLE` against the 45px its region leaves after a 6px margin, so anything
-wider paints into tab 2's cell — which only repaints on a page change, making the
-overflow permanent. The region is also **minute-rate by design**: it replaced a
+**The clock is exactly 5 characters, and that is a hard rule.** `"23:45"` is 63px
+in `F_NUM` against the 69px its region leaves after a 6px margin — zero px of left
+slack, as it has had at every width this region has been. Anything wider paints
+into the room reading, which only repaints on its own compare, making the overflow
+permanent. The region is also **minute-rate by design**: it replaced a
 freshness readout counting seconds since the last poll, and since every poll resets
 that timestamp the number oscillated 0↔1 and repainted the bar several times a
-second. Connection health belongs to the glyph and staleness to the card dimming;
-**do not put a per-second value here.**
+second. Connection health belongs to the banner in §11.1a and staleness to the
+card dimming; **do not put a per-second value here.**
+
+### 11.1a Connectivity banner
+
+Not a page, and not the header — a **cross-page overlay in the body**, which is
+why it sits between the two rather than inside either. It is the third form the
+connectivity readout has taken (`● WIFI ● HA` → 26px glyph → this), and the first
+that costs nothing while everything works.
+
+**It draws only when HA is unreachable**, as `"No Connection"` in `C_ERROR` text
+inside a `C_ERROR` border on a `C_BG` fill — `wChip()` with `BV_ERR`, so it
+inherits the same "the alarm is the border and the text, never a loud fill" idiom
+as a device card's alarm outline. Nothing is drawn in the healthy case.
+
+**One boolean, one message.** The glyph's Wi-Fi-down / HA-down distinction is
+deliberately gone: `!S.haOk` already covers both (a Wi-Fi drop forces it false),
+and it answers the only question a person standing at the panel is actually
+asking — *will anything I tap work?* The finer diagnosis stayed in the serial
+log, exactly as it did when the `WIFI`/`HA` labels were removed.
+
+**It owns a whole row band rather than floating.** The body is the only place
+with room, so the banner must cover something; what it must *not* do is look
+like a rendering fault. Painted straight on top of a row it left fragments of
+whatever it did not quite cover — the bottom of a yellow brightness chip on
+Devices, a 2px cyan sliver on Settings, whose stacked card sits 2px lower. So it
+clears the current page's entire first row first and centres itself in it, and
+every page skips that row while it shows. The consequence worth knowing: on
+Scenes the cleared rect stops short of the scroll gutter (its own region, on its
+own compare — clearing across it erased the up arrow), and on Settings the
+brightness row is hidden even though it still works, being row 0.
 
 ### 11.2 Devices
 

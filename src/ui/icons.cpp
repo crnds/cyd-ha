@@ -79,23 +79,20 @@ void icoRotate(int16_t cx, int16_t cy, uint16_t c) {
   tft.fillTriangle(cx - 3, cy + 1, cx - 8, cy + 1, cx - 6, cy - 4, c);
 }
 
-void icoWifi(int16_t cx, int16_t cy, uint8_t bars, uint16_t on, uint16_t off) {
-  // Bottoms aligned, heights 4/7/10. Unlit bars are still drawn so the glyph
-  // keeps one silhouette — a shape that shrinks with signal would imply a
-  // reading this firmware never actually measures.
-  for (uint8_t i = 0; i < 3; i++) {
-    const int16_t h = 4 + i * 3;
-    tft.fillRect(cx - 5 + i * 4, cy + 5 - h, 2, h, i < bars ? on : off);
-  }
-}
-
-void icoChevron(int16_t cx, int16_t cy, bool up, uint16_t c, int16_t hw,
+void icoChevron(int16_t cx, int16_t cy, ChevDir dir, uint16_t c, int16_t hw,
                 int16_t hh) {
-  if (up) tft.fillTriangle(cx - hw, cy + hh, cx + hw, cy + hh, cx, cy - hh, c);
-  else    tft.fillTriangle(cx - hw, cy - hh, cx + hw, cy - hh, cx, cy + hh, c);
-}
-
-void icoBadge(int16_t cx, int16_t cy, uint16_t c, uint16_t ring) {
-  tft.fillCircle(cx, cy, 3, ring);
-  tft.fillCircle(cx, cy, 2, c);
+  switch (dir) {
+    case CHEV_UP:
+      tft.fillTriangle(cx - hw, cy + hh, cx + hw, cy + hh, cx, cy - hh, c);
+      break;
+    case CHEV_DOWN:
+      tft.fillTriangle(cx - hw, cy - hh, cx + hw, cy - hh, cx, cy + hh, c);
+      break;
+    case CHEV_RIGHT:
+      tft.fillTriangle(cx - hh, cy - hw, cx - hh, cy + hw, cx + hh, cy, c);
+      break;
+    case CHEV_LEFT:
+      tft.fillTriangle(cx + hh, cy - hw, cx + hh, cy + hw, cx - hh, cy, c);
+      break;
+  }
 }

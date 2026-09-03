@@ -18,7 +18,7 @@
 //   y 104..155   row band 2   card at y 106..153
 //   y 156..207   row band 3   card at y 158..205
 //   y    208     divider
-//   y 209..239   header   [wifi] | Devices  Scenes  Settings | 27 55% / 23:45
+//   y 209..239   header   Devices  Scenes  Settings | 27 55% / 23:45
 //
 // The header is anchored to the BOTTOM edge, not the top — moved there on
 // request, not discovered there. Every constant that used to be measured from
@@ -55,13 +55,15 @@
 // A gap leaves pixels nothing ever clears; an overlap is just as bad, because
 // each region only clears its own rect, so whatever spills over is never
 // repainted.
-static_assert(STATUS_ICO_W == TAB_X0, "status glyph and tabs leave a gap");
-// TAB_STRIP_W (config.h) is now DERIVED from STATUS_ROOM_W, STATUS_CLK_W and
-// TAB_X0 rather than an independent constant, so "tabs and the room/clock
-// block do not meet" can no longer go wrong at compile time — there is
-// nothing left for a static_assert to catch here. What tabRect() below can
-// still get wrong (labels too wide for TAB_STRIP_W, margin going negative) is
-// a runtime concern; see its comment.
+// There is nothing left here for a static_assert to catch. The bar is three
+// regions now — the 26px connectivity glyph that used to sit at x 0..25 is
+// gone (its job moved to drawNoConn()'s body overlay), so TAB_X0 is 0 and the
+// strip starts at the screen edge; and TAB_STRIP_W (config.h) is DERIVED from
+// STATUS_ROOM_W, STATUS_CLK_W and TAB_X0 rather than being an independent
+// constant, so "tabs and the room/clock block do not meet" cannot go wrong at
+// compile time either. What tabRect() below can still get wrong (labels too
+// wide for TAB_STRIP_W, margin going negative) is a runtime concern; see its
+// comment.
 // The indicator must sit INSIDE the band a tab clears (STATUS_DIV_Y+1..SCR_H-1),
 // or a tab that stops being current keeps its underline forever; one row higher
 // and it would overwrite the rule, which is painted once and never restored.
@@ -86,6 +88,17 @@ static_assert(BULB_CTL_DY + BULB_CTL_H <= CARD_H,
 // or textTrunc() would be handed a negative width. Shared by every device card
 // now, not just bulbs.
 static_assert(BULB_NAME_W > 0, "device identity column has no room for a name");
+
+// The connectivity overlay must sit wholly inside the row band it clears (see
+// config.h): the band is what removes the content underneath, so a banner
+// hanging out of it would be drawn over pixels nothing cleared and would leave
+// fragments — the exact failure clearing a whole band exists to avoid. Both
+// bounds matter, and the arithmetic spans two blocks of config.h.
+static_assert(NOCONN_Y0 >= ROWS_Y0 && NOCONN_Y0 + NOCONN_H <= ROWS_Y0 + ROW_H,
+              "no-connection banner hangs out of the row band it clears");
+// The Scenes clear stops at the scroll gutter, so the banner has to as well.
+static_assert(NOCONN_X0 >= 0 && NOCONN_X0 + NOCONN_W <= SCENE_SB_X0,
+              "no-connection banner reaches the scene scroll gutter");
 
 // Both device rows keep SIX logical slots and the same slot meanings, even though
 // the two kinds now lay those slots out differently (4 chips + 2 swatches vs
@@ -257,16 +270,14 @@ struct SettingSnap {
 };
 static SettingSnap setSnap;
 
-// Split into independently-dirty regions (glyph | tabs | room reading | clock)
-// so a change in one never repaints the others. Repainting the full bar for a
+// Split into independently-dirty regions (tabs | room reading | clock) so a
+// change in one never repaints the others. Repainting the full bar for a
 // one-character change is what made it visibly flash.
 //
 // tabVis rather than a bare `page`: it encodes the active page AND handles
 // press-flash expiry, which a page field could not.
 struct StatusSnap {
   bool     valid;
-  bool     wifiOk;
-  bool     haOk;
   int16_t  hhmm;    // local time as hour*60+min; -1 while NTP is unsynced
   uint8_t  tabVis[TAB_COUNT];
   char     roomStr[8];   // last rendered room temperature (relocated from the
@@ -276,6 +287,16 @@ struct StatusSnap {
                          // string change still repaints (mirrors icoColour).
 };
 static StatusSnap statusSnap;
+
+// The connectivity overlay's own one-bit snapshot. It is not part of StatusSnap
+// because it is not part of the header: it lives in the body, over whatever the
+// current page drew, and is the only region whose HIDE path cannot repaint
+// itself — see drawNoConn().
+struct NoConnSnap {
+  bool valid;
+  bool shown;
+};
+static NoConnSnap noConnSnap;
 
 // What is physically on the glass, as opposed to S.page (what should be).
 // 0xFF means "nothing valid" and forces a body wipe on the next render.
@@ -305,19 +326,19 @@ static inline int16_t sceneTileY(uint8_t slot) {
 // drawn rect and the tappable rect cannot drift apart.
 //
 // Bulb:  (i) 1 [OFF][1%][30%][100%] (o)(o)     slots 0..3 chips, 4..5 swatches
-// AC:    (i) AC [OFF][COOL][DRY]  [^] 30 [v]    slots 0..2 chips, 3/4/5 stepper
+// AC:    (i) AC [OFF][COOL][DRY]  [v] 30 [^]    slots 0..2 chips, 3/4/5 stepper
 //
 // The two kinds share one Y band now (BULB_CTL_DY/BULB_CTL_H) — the AC's
 // control row used to sit in its own shorter CTL_DY/CTL_H strip under a
 // separate state line, visibly out of step with the bulb rows around it; that
 // distinction is gone along with the AC's stacked layout (see drawDeviceCard).
 //
-// Slot order here is UP-left/DOWN-right, on request — up is slot 3 (left),
-// down is slot 5 (right). This used to be the other way round, deliberately,
-// to read left-to-right as less-to-more; that reasoning is retired along with
-// the layout. The slot numbers themselves are fixed by doAction(), so mapping
-// them here is what buys whichever order is wanted without touching the
-// action layer.
+// Slot order here is DOWN-left/UP-right, on request — down is slot 5 (left),
+// up is slot 3 (right). This has flip-flopped before (originally down-left/
+// up-right to read left-to-right as less-to-more, then swapped to up-left/
+// down-right) and each reasoning is retired along with its layout. The slot
+// numbers themselves are fixed by doAction(), so mapping them here is what
+// buys whichever order is wanted without touching the action layer.
 static void btnRect(uint8_t dev, uint8_t b,
                     int16_t& x, int16_t& y, int16_t& w, int16_t& h) {
   y = cardTop(dev) + BULB_CTL_DY;
@@ -326,7 +347,7 @@ static void btnRect(uint8_t dev, uint8_t b,
   if (S.dev[dev].kind == DEV_CLIMATE) {
     if (b < 3) { x = BULB_CTL_X0 + b * ACM_PITCH; w = ACM_W; return; }
     switch (b) {
-      case AC_BTN_TUP:  x = ACS_X0;                            w = ACS_BTN_W; return;
+      case AC_BTN_TDN:  x = ACS_X0;                            w = ACS_BTN_W; return;
       case AC_BTN_TEMP: x = ACS_X0 + ACS_BTN_W;                w = ACS_VAL_W; return;
       default:          x = ACS_X0 + ACS_BTN_W + ACS_VAL_W;    w = ACS_BTN_W; return;
     }
@@ -365,6 +386,18 @@ static inline bool pressedNow(HitKind k, int16_t idx, int8_t sub) {
   return S.pressKind == k && S.pressIdx == idx && S.pressSub == sub &&
          S.pressMs && (millis() - S.pressMs) < PRESS_FLASH_MS;
 }
+
+// True while the connectivity banner OWNS row band 0, so every page's draw
+// function skips its first row (see drawNoConn()). That skip is what makes the
+// ownership total instead of a race: the banner is drawn LAST, so anything a
+// page paints in that band on a LATER pass lands on top of it, and no page's
+// dirty-compare would ever put it back — drawNoConn()'s own compare only tracks
+// whether the banner should be shown, not whether something scribbled on it.
+// Two real cases, not hypotheticals: a scene scroll repaints every visible tile,
+// and a device card's stale/err transition repaints inside band 0 by itself.
+// The skipped rows' snapshots go stale while this holds, which is safe because
+// the hide path is a full screenInvalidate().
+static inline bool noConnShown() { return !S.haOk; }
 
 // ── active-state derivation ──────────────────────────────
 
@@ -587,14 +620,19 @@ static void roomTempText(const DeviceState& d, char* out, size_t n, bool& degree
   snprintf(out, n, "%.0f", d.room);
 }
 
-// Humidity alone, unconditionally blank rather than "--" when there is nothing
-// to show: unlike the room temperature (always drawn, even as "--", so its
-// position in the header never jumps), a missing humidity reading simply
-// means one less piece drawn — see drawStatusRoom(), the sole caller now.
+// Humidity DIGITS ONLY, without the "%" — the sign is drawn separately, and a
+// size smaller, by drawStatusRoom(); see STATUS_ROOM_W in config.h for why it
+// could not come along when the digits went up to F_NUM. It is still the whole
+// string statusSnap.humStr compares on, so the dirty-compare is unaffected by
+// the split.
+//
+// Unconditionally blank rather than "--" when there is nothing to show: unlike
+// the room temperature (always drawn, even as "--", so its position in the header
+// never jumps), a missing humidity reading simply means two fewer pieces drawn.
 static void humidityText(const DeviceState& d, char* out, size_t n) {
   out[0] = '\0';
   if (!d.known || !d.avail || d.humidity < 0) return;
-  snprintf(out, n, "%d%%", d.humidity);
+  snprintf(out, n, "%d", d.humidity);
 }
 
 // The AC setpoint as drawn between the chevrons. "--" rather than a guessed
@@ -780,56 +818,34 @@ static void drawDeviceCard(uint8_t dev, bool force) {
 
 // ── header ───────────────────────────────────────────────
 
-// The whole connectivity readout, in 26px. It replaced two labelled dots reading
-// "WIFI" and "HA" — permanent debug chrome that spent 88px telling a healthy
-// system it was healthy. Now the glyph is quiet when there is nothing to say and
-// specific when there is:
-//
-//   both up      3 bars in C_TEXT3      present, unobtrusive, reassuring
-//   HA down      3 bars + amber badge   the link is up, the service is not
-//   Wi-Fi down   0 bars, all in red     nothing is reachable
-//
-// Colour AND a shape/badge change, never colour alone — the palette collapses to
-// red at night, and this is the one region a colour-blind reading of "is it
-// working" must survive.
-static void drawStatusGlyph(bool wifiOk, bool haOk) {
-  tft.fillRect(0, STATUS_DIV_Y + 1, STATUS_ICO_W, STATUS_H - 1, C_BG);
-  if (!wifiOk) {
-    icoWifi(STATUS_ICO_CX, STATUS_CY, 0, C_ERROR, C_ERROR);
-    return;
-  }
-  icoWifi(STATUS_ICO_CX, STATUS_CY, 3, C_TEXT3, C_DIVIDER);
-  if (!haOk) icoBadge(STATUS_ICO_CX + 6, STATUS_CY - 6, C_WARNING, C_BG);
-}
-
 // Each tab's cell hugs its OWN label (measured, not a shared constant — see
-// the TAB_STRIP_W comment in config.h), with the leftover TAB_STRIP_W split
-// evenly as a margin on the two OUTER edges rather than spent as slack inside
-// every cell. Computed once and cached: TAB_LABEL never changes at runtime,
-// so there is nothing to invalidate.
+// the TAB_STRIP_W comment in config.h). Computed once and cached: TAB_LABEL
+// never changes at runtime, so there is nothing to invalidate.
+//
+// THE STRIP IS FLUSH LEFT, at TAB_X0 (0), and all the leftover TAB_STRIP_W
+// collects as one margin on the RIGHT, before the room reading. It used to be
+// centred, with the leftover split evenly as two outer margins — which was the
+// right call when TAB_X0 was 26 and the left "margin" was really the gap to the
+// connectivity glyph beside it. Deleting that glyph turned the same arithmetic
+// into ~22px of blank screen in the bottom-left corner with nothing on the far
+// side of it, so the tabs read as adrift rather than as a group; flush left on
+// request. Only the first label's own TAB_LBL_DX now sits between "Devices" and
+// the screen edge, which is what makes the strip look anchored.
 //
 // A future-proofing note rather than a live bug: if TAB_LABEL ever grew wide
-// enough that 3 cells + 2*TAB_GAP exceeded TAB_STRIP_W, `margin` goes negative
-// and tabs would overlap. The 3 shipped labels leave 19px to spare now (it
-// was 57px before the header grew a room-reading region and TAB_GAP was cut
-// to make room for that region's F_TITLE text; see STATUS_ROOM_W in config.h
-// for why the margin partly grew back — a humidity-budget fix, not a second
-// deliberate squeeze), so this is deliberately not runtime-guarded —
-// simulator.html's draw() warns on the same arithmetic, which is where a
-// future label or font change would be caught.
+// enough that 3 cells + 2*TAB_GAP exceeded TAB_STRIP_W, the last cell would run
+// into the room reading. The 3 shipped labels leave 45px to spare (19px before
+// the glyph's 26px was freed), so this is deliberately not runtime-guarded —
+// simulator.html's draw() warns on the same arithmetic, which is where a future
+// label or font change would be caught.
 static void tabRect(uint8_t i, int16_t& x, int16_t& w) {
   static int16_t cellX[TAB_COUNT];
   static int16_t cellW[TAB_COUNT];
   static bool ready = false;
   if (!ready) {
-    int16_t total = 0;
+    int16_t cx = TAB_X0;
     for (uint8_t k = 0; k < TAB_COUNT; k++) {
       cellW[k] = textW(F_MICRO, TAB_LABEL[k]) + 2 * TAB_LBL_DX;
-      total += cellW[k];
-    }
-    total += (TAB_COUNT - 1) * TAB_GAP;
-    int16_t cx = TAB_X0 + (TAB_STRIP_W - total) / 2;
-    for (uint8_t k = 0; k < TAB_COUNT; k++) {
       cellX[k] = cx;
       cx += cellW[k] + TAB_GAP;
     }
@@ -857,15 +873,21 @@ static void drawTab(uint8_t i, const char* label, uint8_t vis) {
 // already makes when it wires up ENT_AC at that index, so this is not a new
 // coupling, just a second place that relies on it.
 //
-// Drawn as <temp><ring> <humidity> / , left-aligned from the region's left
-// edge (SCR_W - STATUS_ROOM_W - STATUS_CLK_W), immediately before the clock's
-// own region. The temperature and humidity are F_TITLE — bumped up from
-// F_MICRO on request, to match the clock they sit beside, which is what this
-// region cost TAB_GAP (config.h) to afford. The "/" separator stayed
-// F_MICRO: it is punctuation, not data, so it stays quiet rather than
-// competing with the two numbers on either side of it. Humidity is skipped
-// when there's nothing to show (humidityText() returns "") but the "/" still
-// draws, so the separator's position doesn't jump around with it.
+// Drawn as <temp><ring> <humidity>%, left-aligned from the region's left edge
+// (SCR_W - STATUS_ROOM_W - STATUS_CLK_W), immediately before the clock's own
+// region.
+//
+// THE NUMBERS ARE F_NUM, THE "%" IS NOT, and that split is the whole reason this
+// fits — see STATUS_ROOM_W in config.h. F_NUM's "%" is 21px against F_TITLE's 9,
+// which this region does not have and never would; the sign is a unit marker
+// rather than data, so it stays a size down, the same argument that used to keep
+// the "/" separator quiet. That "/" is gone: with the clock now the same size as
+// these digits, the 6px of air STATUS_ROOM_W leaves does the separating better
+// than a tiny glyph beside 18px numbers did.
+//
+// Humidity is skipped entirely when there is nothing to show (humidityText()
+// returns ""), digits and sign together — there is no longer a trailing mark
+// whose position could jump when it appears.
 static void drawStatusRoom(bool force) {
   DeviceState& d   = S.dev[NUM_BULBS];
   const uint32_t now = millis();
@@ -885,26 +907,34 @@ static void drawStatusRoom(bool force) {
   const int16_t x0 = SCR_W - STATUS_ROOM_W - STATUS_CLK_W;
   tft.fillRect(x0, STATUS_DIV_Y + 1, STATUS_ROOM_W, STATUS_H - 1, C_BG);
 
+  // The small "%" sits on the BIG digits' baseline, not on their centre line:
+  // F_NUM's baseline is cy+10 and F_TITLE's is cy+5, so shifting its datum down
+  // by the difference lands the two on the same row. Centred instead, it would
+  // float in the middle of the tall digits and read as a smaller number beside
+  // them rather than as their unit.
+  const int16_t pctCy = STATUS_CY + (fontBaseline(F_NUM) - fontBaseline(F_TITLE));
+
   int16_t x = x0;
-  textAt(F_TITLE, room, x, STATUS_CY, ML_DATUM, fg);
-  x += textW(F_TITLE, room);
+  textAt(F_NUM, room, x, STATUS_CY, ML_DATUM, fg);
+  x += textW(F_NUM, room);
   if (degree) {
-    // Same idiom as the old AC card and the AC setpoint used: ring rides the
-    // digit tops, fontInkTop() locates them, a small fixed gap clears the
-    // digits. Ring right edge is x+5 (3px gap + 2px radius) regardless of
-    // font — only fontInkTop()'s role argument moved from MICRO to TITLE when
-    // the digits did, which is where STATUS_ROOM_W's budget charges it now.
+    // Same idiom as the AC setpoint: ring rides the digit tops, fontInkTop()
+    // locates them, a small fixed gap clears them. Ring right edge is x+5 (3px
+    // gap + 2px radius) and STAYS a 2px radius at F_NUM — wValue() draws exactly
+    // this ring beside the setpoint's F_NUM digits, so growing it here would make
+    // the two disagree. Only fontInkTop()'s role argument tracks the digits, and
+    // it has now moved MICRO -> TITLE -> NUM with them.
     const int16_t rcx = x + 3;
-    const int16_t rcy = STATUS_CY + fontInkTop(F_TITLE) + 2;
+    const int16_t rcy = STATUS_CY + fontInkTop(F_NUM) + 2;
     tft.drawCircle(rcx, rcy, 2, fg);
     x += 5;
   }
   x += SP_1;
   if (hum[0]) {
-    textAt(F_TITLE, hum, x, STATUS_CY, ML_DATUM, fg);
-    x += textW(F_TITLE, hum) + SP_1;
+    textAt(F_NUM, hum, x, STATUS_CY, ML_DATUM, fg);
+    x += textW(F_NUM, hum);
+    textAt(F_TITLE, "%", x, pctCy, ML_DATUM, fg);
   }
-  textAt(F_MICRO, "/", x, STATUS_CY, ML_DATUM, C_TEXT3);
 
   snprintf(statusSnap.roomStr, sizeof(statusSnap.roomStr), "%s", room);
   snprintf(statusSnap.humStr,  sizeof(statusSnap.humStr),  "%s", hum);
@@ -912,8 +942,6 @@ static void drawStatusRoom(bool force) {
 }
 
 static void drawStatus(bool force) {
-  const bool wifiOk = (S.netState == 1);
-
   // Local wall clock, 24h. getLocalTime with a 0 ms timeout returns immediately
   // — it must never block, since this runs on every render pass. It reports
   // false until SNTP has landed, which is what drives the "--:--" placeholder.
@@ -923,12 +951,9 @@ static void drawStatus(bool force) {
 
   const bool force_ = force || !statusSnap.valid;
 
-  // The four regions below tile the bar exactly (static_assert'd at the top of
-  // this file), so between them they cover every pixel and no full-width clear
-  // is needed to catch a gap.
-  if (force_ || wifiOk != statusSnap.wifiOk || S.haOk != statusSnap.haOk)
-    drawStatusGlyph(wifiOk, S.haOk);
-
+  // The three regions below tile the bar exactly (see the top of this file), so
+  // between them they cover every pixel and no full-width clear is needed to
+  // catch a gap.
   uint8_t tabVis[TAB_COUNT];
   for (uint8_t i = 0; i < TAB_COUNT; i++)
     tabVis[i] = pressedNow(HIT_TAB, (int16_t)i, -1) ? BV_PRESSED
@@ -949,23 +974,24 @@ static void drawStatus(bool force) {
   // Repaints once a minute. Nothing else lives in this region, so a minute-rate
   // repaint is invisible — unlike the per-second freshness counter that used to
   // live here and made the whole bar flicker. KEEP THIS REGION MINUTE-RATE:
-  // connection health belongs to the glyph and staleness to the card dimming,
-  // not here.
+  // connection health belongs to drawNoConn()'s overlay and staleness to the
+  // card dimming, not here.
   //
-  // The clock is always exactly 5 characters. "23:45" is 35px in F_TITLE
-  // against the 41px this region now leaves (it was 51px, ~10px of slack,
-  // before the room reading moved in beside it — see STATUS_CLK_W in
-  // config.h), so anything wider paints into the room region, which only
-  // repaints on ITS OWN compare and would leave the overflow permanent.
-  // There is now a 6px right margin and ZERO px of left slack — don't put
-  // anything else here.
+  // The clock is always exactly 5 characters, and it is F_NUM now — up a size
+  // on request, together with the room reading beside it, spending the space the
+  // deleted connectivity glyph and a TAB_GAP cut freed (see STATUS_CLK_W in
+  // config.h). "23:45" is 63px against F_TITLE's 35, and the region grew 41 -> 69
+  // to hold it, so the margins are what they always were: 6px on the right, ZERO
+  // px of left slack. Anything wider paints into the room region, which only
+  // repaints on ITS OWN compare and would leave the overflow permanent — don't
+  // put anything else here.
   if (force_ || hhmm != statusSnap.hhmm) {
     tft.fillRect(SCR_W - STATUS_CLK_W, STATUS_DIV_Y + 1, STATUS_CLK_W,
                  STATUS_H - 1, C_BG);
     char clk[8];
     if (hhmm < 0) snprintf(clk, sizeof(clk), "--:--");
     else          snprintf(clk, sizeof(clk), "%02d:%02d", hhmm / 60, hhmm % 60);
-    textAt(F_TITLE, clk, SCR_W - SP_2 + 2, STATUS_CY, MR_DATUM,
+    textAt(F_NUM, clk, SCR_W - SP_2 + 2, STATUS_CY, MR_DATUM,
            hhmm < 0 ? C_DIM : C_TEXT);
   }
 
@@ -983,10 +1009,73 @@ static void drawStatus(bool force) {
   // updates those three itself, the same way RowSnap fields used to be owned
   // by drawDeviceCard() alone.
   statusSnap.valid  = true;
-  statusSnap.wifiOk = wifiOk;
-  statusSnap.haOk   = S.haOk;
   statusSnap.hhmm   = hhmm;
   memcpy(statusSnap.tabVis, tabVis, sizeof(tabVis));
+}
+
+// ── connectivity overlay (body, not header) ──────────────
+
+// What replaced the header's connectivity glyph, on request. Three things about
+// it are decisions rather than mechanics:
+//
+// IT IS GATED ON !S.haOk ALONE, so it says "No Connection" and not which end
+// failed. The glyph distinguished Wi-Fi-down (0 bars, red) from HA-down (3 bars
+// + amber badge); that distinction is deliberately dropped, not overlooked.
+// updateNetState() already forces S.haOk false whenever Wi-Fi drops (main.cpp),
+// so this one bit covers both failure modes correctly, and it is the bit that
+// actually matters to someone standing in front of the panel: nothing they tap
+// is going to work. The finer diagnosis survives in the serial log — the same
+// trade this firmware already made when the literal "WIFI"/"HA" labels went.
+//
+// IT IS wChip() + BV_ERR, not new drawing code. ctlColour(BV_ERR) resolves to
+// C_BG fill / C_ERROR border / C_ERROR text, which is this codebase's standing
+// idiom for a fault: the alarm is the border and the text, never a loud fill
+// (that is BV_PRESSED's, and it stays the only full-brightness fill the UI
+// draws). Note this is the FIRST wChip() call that actually reaches that table
+// entry — BV_ERR has until now only been consumed by drawSceneTile()'s own
+// local switch, which picks different values for a 88x64 tile — so what is
+// being reused here is the colour-table idiom, not an already-rendered
+// appearance.
+//
+// THE HIDE PATH CANNOT REPAINT ITSELF, and that is why it calls
+// screenInvalidate(). Every other region owns its rect and clears it; this one
+// sits ON TOP of a card or a tile that has already been drawn and cached as
+// clean, so clearing to C_BG would leave a banner-shaped hole in whatever is
+// underneath. fillScreen() would fix that and flash the whole panel for one
+// frame to remove a 114x24 banner. screenInvalidate() writes no pixels at all:
+// it just drops every snapshot, so the NEXT screenRender() (~20ms, next loop
+// pass) runs bodyReset() and redraws the body from scratch with real content.
+// That is the same one-frame lag night mode and screen flip already accept.
+static void drawNoConn(bool force) {
+  const bool show  = !S.haOk;
+  const bool first = force || !noConnSnap.valid;
+
+  if (!first && show == noConnSnap.shown) return;
+
+  if (show) {
+    // Clear the band first, then centre the banner in it — see config.h for why
+    // clearing is what makes this read as an overlay rather than as a clipping
+    // fault. The rect is the CURRENT PAGE's first row, because the two grids do
+    // not share a pitch: a 52px row band leaves 12px of a 64px scene tile
+    // showing under the banner. And on Scenes it must stop at the scroll gutter,
+    // which is its own region drawn by drawSceneScrollbar() on its own compare —
+    // clearing across it erased the up arrow with nothing to put it back.
+    const bool    scenes = (S.page == PAGE_SCENES);
+    const int16_t w      = scenes ? SCENE_SB_X0   : SCR_W;
+    const int16_t h      = scenes ? SCENE_TILE_H  : ROW_H;
+    tft.fillRect(0, rowTop(0), w, h, C_BG);
+    wChip(NOCONN_X0, NOCONN_Y0, NOCONN_W, NOCONN_H, "No Connection", nullptr,
+          BV_ERR);
+  } else if (!first) {
+    // A genuine falling edge. Never on a first draw — there is nothing on the
+    // glass to erase then, and invalidating would loop. screenInvalidate()
+    // re-zeroes noConnSnap itself, so nothing below may run.
+    screenInvalidate();
+    return;
+  }
+
+  noConnSnap.valid = true;
+  noConnSnap.shown = show;
 }
 
 // ── scenes page ──────────────────────────────────────────
@@ -1081,9 +1170,9 @@ static void drawSceneScrollbar(uint8_t pressed) {
 
   // Dimmed at the ends rather than hidden: a control that vanishes moves the
   // other one's apparent target, and this is a resistive panel.
-  icoChevron(cx, ROWS_Y0 + 13, true,
+  icoChevron(cx, ROWS_Y0 + 13, CHEV_UP,
              pressed == 1 ? C_TEXT : (atTop ? C_DISABLED : C_TEXT2), 6, 5);
-  icoChevron(cx, bot - 13, false,
+  icoChevron(cx, bot - 13, CHEV_DOWN,
              pressed == 2 ? C_TEXT : (atBot ? C_DISABLED : C_TEXT2), 6, 5);
 
   // Track between the arrows, with a thumb sized by how much of the list is on
@@ -1119,6 +1208,11 @@ static void drawScenes() {
   const uint16_t base  = (uint16_t)(S.sceneRow * SCENE_COLS);
 
   for (uint8_t slot = 0; slot < SCENE_PER_PAGE; slot++) {
+    // The top tile row shares band 0 with the connectivity banner, which owns it
+    // while shown — including across a scroll, which would otherwise repaint
+    // every tile straight over the banner.
+    if (slot < SCENE_COLS && noConnShown()) continue;
+
     const uint16_t idx = base + slot;
 
     uint8_t vis = BV_INACTIVE;
@@ -1197,8 +1291,17 @@ static void drawSettingChrome(uint8_t row) {
 
 static void drawSettings() {
   const bool first = !setSnap.valid;
+  // SET_ROW_BRI is 0, so the brightness card shares band 0 with the connectivity
+  // banner and is skipped whole while that is shown — chrome, level caption and
+  // all five chips. Nothing else on this page is affected: the other three rows
+  // still draw, and they are the ones that still WORK while HA is unreachable,
+  // since no Settings row touches Home Assistant at all.
+  const bool briHidden = noConnShown();
   if (first) {
-    for (uint8_t r = 0; r < SET_ROWS; r++) drawSettingChrome(r);
+    for (uint8_t r = 0; r < SET_ROWS; r++) {
+      if (r == SET_ROW_BRI && briHidden) continue;
+      drawSettingChrome(r);
+    }
     setSnap.briShown = -1;
   }
 
@@ -1206,7 +1309,7 @@ static void drawSettings() {
   // segmented control shows WHICH of five is selected; it does not say what the
   // selection means, and "50%" spelled out is the difference between a row of
   // chips and a row of chips you can read.
-  if (setSnap.briShown != (int8_t)S.set.briIdx) {
+  if (!briHidden && setSnap.briShown != (int8_t)S.set.briIdx) {
     setSnap.briShown = (int8_t)S.set.briIdx;
     const int16_t top = cardTop(SET_ROW_BRI);
     tft.fillRect(CARD_IN_X1 - 44, top + CARD_L1_Y, 45, CARD_L1_H, C_SURFACE);
@@ -1214,7 +1317,7 @@ static void drawSettings() {
            MR_DATUM, C_TEXT2);
   }
 
-  for (uint8_t b = 0; b < BRI_STEPS; b++) {
+  for (uint8_t b = 0; b < BRI_STEPS && !briHidden; b++) {
     const uint8_t vis = pressedNow(HIT_SETTING, SET_ROW_BRI, (int8_t)b)
                             ? BV_PRESSED
                             : (b == S.set.briIdx ? BV_ACTIVE : BV_INACTIVE);
@@ -1299,13 +1402,16 @@ void screenInvalidate() {
   memset(&sceneSnap,  0, sizeof(sceneSnap));
   memset(&setSnap,    0, sizeof(setSnap));
   memset(&statusSnap, 0, sizeof(statusSnap));
+  memset(&noConnSnap, 0, sizeof(noConnSnap));
   shownPage = 0xFF;   // -> bodyReset() on the next render
 }
 
 // Wipes everything above the header and invalidates only the BODY snapshots.
-// Deliberately leaves statusSnap alone — a page switch changes neither the
-// connectivity glyph nor the clock, and repainting them would reintroduce the
-// flicker the split regions exist to prevent.
+// Deliberately leaves statusSnap alone — a page switch changes neither the tabs'
+// meaning nor the clock, and repainting them would reintroduce the flicker the
+// split regions exist to prevent. noConnSnap IS reset, because unlike the
+// header the overlay lives in the rect this function just filled: its pixels
+// are gone, so the cached "already shown" byte would be a lie.
 //
 // The wipe is mandatory, not defensive. Devices and Settings happen to
 // self-clear (each card's first draw fills its whole row band, and the four
@@ -1315,15 +1421,18 @@ void screenInvalidate() {
 // square-fillRect note in drawSceneTile().
 static void bodyReset() {
   tft.fillRect(0, 0, SCR_W, STATUS_Y0, C_BG);
-  memset(snap,       0, sizeof(snap));
-  memset(&sceneSnap, 0, sizeof(sceneSnap));
-  memset(&setSnap,   0, sizeof(setSnap));
+  memset(snap,        0, sizeof(snap));
+  memset(&sceneSnap,  0, sizeof(sceneSnap));
+  memset(&setSnap,    0, sizeof(setSnap));
+  memset(&noConnSnap, 0, sizeof(noConnSnap));
 }
 
 void screenRender() {
+  bool bodyWasReset = false;
   if (shownPage != (uint8_t)S.page) {
     shownPage = (uint8_t)S.page;
     bodyReset();
+    bodyWasReset = true;
   }
 
   drawStatus(false);
@@ -1331,9 +1440,17 @@ void screenRender() {
     case PAGE_SCENES:   drawScenes();   break;
     case PAGE_SETTINGS: drawSettings(); break;
     default:
-      for (uint8_t i = 0; i < NUM_DEVICES; i++) drawDeviceCard(i, false);
+      for (uint8_t i = 0; i < NUM_DEVICES; i++) {
+        if (i == 0 && noConnShown()) continue;   // band 0 belongs to the banner
+        drawDeviceCard(i, false);
+      }
       break;
   }
+
+  // LAST, and over the page: it is an overlay, so whatever the page just drew
+  // has to already be on the glass. bodyReset() having run counts as a force —
+  // it wiped the overlay's pixels along with everything else.
+  drawNoConn(bodyWasReset);
 }
 
 // Decodes the RLE logo a row at a time. A full 96x96 RGB565 buffer would be

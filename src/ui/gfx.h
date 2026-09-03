@@ -26,11 +26,21 @@ extern TFT_eSPI tft;
 //
 // Roles, not sizes, so a component asks for the job the text is doing:
 //
-//   F_NUM    Font 4 (26px box)  the AC setpoint — the one number being adjusted,
-//                               and deliberately the largest thing in the body
-//   F_TITLE  Font 2 (16px box)  card titles, the clock: what a thing IS
+//   F_NUM    Font 4 (26px box)  LIVE NUMERIC READOUTS: the AC setpoint, and the
+//                               header's room temperature/humidity and clock
+//   F_TITLE  Font 2 (16px box)  card titles: what a thing IS. Also a unit marker
+//                               beside F_NUM digits (the header's "%")
 //   F_BODY   Font 2 (16px box)  live state, chip labels, captions
 //   F_MICRO  Font 1 (GLCD 6x8)  last-resort fit; ALSO the tab bar, on request
+//
+// F_NUM WAS THE AC SETPOINT ALONE until the header's two number regions were
+// bumped up to it on request. That widened the role from "the one number being
+// adjusted" to "numbers read at a glance", and it cost the setpoint its old claim
+// to being the largest thing on the panel. The setpoint still reads as the
+// emphasis of the Devices page, but now because of where it sits — on a card,
+// between the two chevrons that change it — rather than because nothing else is
+// as big. Anything NEW asking for F_NUM should be a live number of that kind; a
+// label or a caption still must not have it (see the CARD_L1_H note below).
 //
 // F_MICRO's tab-bar use is a deliberate, scoped exception to "last-resort,
 // never a first choice" below — chosen there specifically, on request, to
@@ -47,9 +57,14 @@ extern TFT_eSPI tft;
 //     C_TEXT2/C_TEXT3, see theme.h) — the weight signal that used to carry half
 //     of it is simply not available. Do not "fix" this by promoting titles to
 //     Font 4: at an 18px cap height it does not fit CARD_L1_H, and a card title
-//     larger than the AC setpoint inverts the page's one intended emphasis.
+//     as large as the AC setpoint inverts the emphasis of the row it sits on.
 //   * There is nothing between Font 2 and Font 4 (10px caps and 18px caps), so
 //     the ladder has a hole in the middle and F_NUM is the only step above body.
+//     Bumping anything "one size" therefore costs 1.8x the WIDTH, not a nudge —
+//     which is why the header could only afford it for two regions after a glyph
+//     was deleted and TAB_GAP cut twice, and why its "%" had to stay behind at
+//     F_TITLE (21px against 9px). Mixing two roles on one line needs
+//     fontBaseline(); see below.
 //
 // Body text is accordingly SMALLER than the FreeSans build it replaced: 10px
 // caps against 13px. That is the cost of the pixel grid, and it is why F_MICRO
@@ -78,6 +93,14 @@ void fontSet(FontRole r);
 // glyph data. Re-run it if a role is ever pointed at a different face.
 int16_t fontInkTop(FontRole r);
 int16_t fontInkBottom(FontRole r);
+
+// Baseline row of `r`, also relative to textAt()'s `cy`. For MIXING TWO ROLES ON
+// ONE LINE: an M* datum centres each role on its own box, so the same cy does NOT
+// put two roles on the same baseline, and the difference of two of these is the
+// correction. The header's room reading needs it for the small "%" that follows
+// its big digits. Don't reach for fontInkBottom() instead — that is an envelope
+// including descenders, so on glyphs that have none it aligns the wrong row.
+int16_t fontBaseline(FontRole r);
 
 // Pixel width in `r`. Leaves `r` selected.
 int16_t textW(FontRole r, const char* s);

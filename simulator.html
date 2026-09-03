@@ -39,7 +39,7 @@
     <button onclick="setAll(false)">all bulbs off</button>
     <button onclick="stale=!stale;draw()">toggle stale</button>
     <button onclick="haOk=!haOk;draw()">toggle HA down</button>
-    <button onclick="wifiOk=!wifiOk;draw()">toggle Wi-Fi down</button>
+    <button onclick="wifiOk=!wifiOk;if(!wifiOk)haOk=false;draw()">toggle Wi-Fi down</button>
   </div>
   <div class="row">
     <button onclick="dev[1].avail=!dev[1].avail;draw()">bulb 2 unavailable</button>
@@ -85,25 +85,30 @@ const SP_1=4, SP_2=8, SP_3=12, SP_4=16, SP_6=24;
 // header — anchored to the BOTTOM edge, not the top. Moved on request; the
 // divider is now at the TOP of the band (the seam with the body above it), and
 // content sits below it, mirrored from the old top-anchored layout.
-// STATUS_CLK_W narrowed 51->41 (35px clock + 6px right margin, zero left
-// slack now) and STATUS_ROOM_W is new: the AC's room reading, relocated here
-// from its card on request (see roomTempText()/humidityText() below and
-// drawStatusRoom() below) so it reads on every page. Its temperature and
-// humidity are F_TITLE, not F_MICRO — bumped one size on request to match
-// the clock beside them; the "/" separator stayed F_MICRO (punctuation, not
-// data). TAB_GAP paid for the extra width (18->12, still on the SP_* scale).
-// Humidity's budget is 2 digits ("99%"), not 3 ("100%") — an indoor AC'd
-// bedroom sensor doesn't read 100% relative humidity any more than the room
-// reads -10C, so padding for that ceiling was the same realistic-case error
-// the temperature side already knew to avoid; corrected on request.
-// Budget: "27"(16) + ring(5) + gap(4) + "99%"(25) + gap(4) + "/"(6) = 60, of
-// 60 — zero leftover, so zero gap before the clock (drawStatusRoom() adds no
-// gap of its own after the "/", so this constant is the only thing that sets
-// it, and it was cut on request as far as the content allows).
-const STATUS_H=32, STATUS_Y0=SCR_H-STATUS_H, STATUS_ICO_W=26, TAB_X0=26, TAB_GAP=SP_3,
-      TAB_COUNT=3, STATUS_CLK_W=41, STATUS_ROOM_W=60,
+// THREE regions, tiling the bar exactly (171 + 80 + 69 = 320). The fourth was a
+// 26px connectivity glyph at x 0..25 (STATUS_ICO_W), with the tab strip starting
+// after it at TAB_X0 26; it is gone, replaced by the NOCONN_* body overlay below,
+// and TAB_X0 is 0 as a result.
+//
+// BOTH NUMBER REGIONS ARE F_NUM NOW — up a size on request, spending the 26px the
+// glyph freed plus 8px from a TAB_GAP cut (12->8, still on the SP_* scale; it went
+// 18->12 for the previous bump, so this is its second cut for the same buyer).
+// There is no size between F_TITLE and F_NUM — TFT_eSPI has no Font 3 or 5 — so
+// "one size up" is 10px caps -> 18px and 1.8x the width.
+//   clock 69 = "23:45"(63) + 6px right margin, zero left slack (was 41 = 35+6)
+//   room  80 = "27"(28) + ring(5) + gap(4) + "99"(28) + "%"(9, TITLE) = 74, +6
+// Two pieces deliberately did NOT grow: "%" stays TITLE (F_NUM's is 21px, which
+// this region does not have) and is drawn BASELINE-ALIGNED to the big digits, and
+// the ring stays a 2px circle to match the one wValue() draws beside the AC
+// setpoint's F_NUM digits. The trailing "/" is GONE — vestigial at MICRO beside
+// 18px digits, and the 6px of room slack now separates the two blocks instead.
+// That 6px is deliberate, not leftover: don't spend it.
+// Humidity's budget is still 2 digits, not 3 ("100%") — an indoor AC'd bedroom
+// sensor doesn't read 100% RH any more than the room reads -10C.
+const STATUS_H=32, STATUS_Y0=SCR_H-STATUS_H, TAB_X0=0, TAB_GAP=SP_2,
+      TAB_COUNT=3, STATUS_CLK_W=69, STATUS_ROOM_W=80,
       TAB_STRIP_W=SCR_W-STATUS_ROOM_W-STATUS_CLK_W-TAB_X0,
-      STATUS_DIV_Y=STATUS_Y0, STATUS_CY=STATUS_DIV_Y+16, STATUS_ICO_CX=13;
+      STATUS_DIV_Y=STATUS_Y0, STATUS_CY=STATUS_DIV_Y+16;
 // Underline indicator, seated on the header rule FROM BELOW now (the rule is at
 // the top of the band). 2px so "Settings"' descenders keep clear of it —
 // asserted below, not assumed.
@@ -120,6 +125,15 @@ const CARD_DY=2, CARD_H=ROW_H-2*CARD_DY, CARD_X=SP_2, CARD_W=SCR_W-2*SP_2,
 const CARD_L1_CY=8, CARD_L1_Y=1, CARD_L1_H=19,
       CARD_ICO_CX=CARD_X+15, CARD_ICO_R=7, CARD_TXT_X=CARD_X+28,
       CTL_DY=20, CTL_H=26;
+
+// Connectivity overlay — BODY, not header, and the only thing here that is not
+// laid out BY the row grid but ON it. It CLEARS THE WHOLE OF ROW BAND 0 and
+// centres the banner in it, which is what stops fragments of the row underneath
+// reading as a clipping bug. Declared after CTL_H because it borrows a chip's
+// height. See config.h for the full reasoning, including why Scenes' 64px tiles
+// on a 72px pitch are the accepted cost of picking the row grid.
+const NOCONN_H=CTL_H, NOCONN_W=114, NOCONN_X0=(SCR_W-NOCONN_W)/2,
+      NOCONN_Y0=ROWS_Y0+(ROW_H-NOCONN_H)/2;
 
 // control grids. CHIP_* is the Settings brightness row alone now — the bulb rows
 // went inline and carry their own narrower chip, so the two pages no longer
@@ -486,6 +500,10 @@ function sceneStress(n){
 const sceneRowsN=()=>Math.ceil(SCENE.length/SCENE_COLS);
 const sceneMaxRow=()=>Math.max(0, sceneRowsN()-SCENE_VIS_ROWS);
 
+// wifiOk no longer draws anything itself — the connectivity overlay is gated on
+// haOk alone, exactly as drawNoConn() is. It is kept because it drives the
+// coupling the firmware really has (Wi-Fi down => haOk false), which is what
+// makes the "toggle Wi-Fi down" button and ?wifi=0 meaningful tests of it.
 let stale=false, haOk=true, wifiOk=true, page=PAGE_DEVICES, sceneRow=0, errAt=0;
 // nightMode: 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
 const NIGHT_CHIP_MODE=[0,2,1];   // chip position -> mode: Off, Shift, Red
@@ -512,12 +530,18 @@ const warn=m=>warnings.push(m);
 function btnCount(d){ return d.kind==='climate'?AC_BTNS:BULB_BTNS; }
 const rowTop  = i => ROWS_Y0+i*ROW_H;
 const cardTop = i => rowTop(i)+CARD_DY;
+// True while the connectivity banner OWNS row band 0, so every page skips its
+// first row. In the firmware that skip is load-bearing (the banner draws last,
+// so a later repaint underneath would land on top of it and no compare would put
+// it back — a scene scroll and a card's stale transition both do that); here it
+// just keeps the simulator honest about what the panel will show.
+const noConnShown = () => !haOk;
 const sceneTileX = s => SCENE_X0+(s%SCENE_COLS)*SCENE_PITCH_X;
 const sceneTileY = s => ROWS_Y0+Math.floor(s/SCENE_COLS)*SCENE_PITCH_Y;
 
 // The one function that knows the two row kinds lay out the same six slots
-// differently IN X — including the AC stepper's slot order, UP left / DOWN
-// right (3 left, 5 right) on request. They share one Y band now
+// differently IN X — including the AC stepper's slot order, DOWN left / UP
+// right (5 left, 3 right) on request. They share one Y band now
 // (BULB_CTL_DY/BULB_CTL_H): the AC's control row used to sit in its own
 // shorter strip under a separate state line, out of step with the bulb rows
 // around it; that is gone along with its stacked layout.
@@ -525,7 +549,7 @@ function btnRect(i,b){
   const y=cardTop(i)+BULB_CTL_DY, h=BULB_CTL_H;
   if(dev[i].kind==='climate'){
     if(b<3) return {x:BULB_CTL_X0+b*ACM_PITCH, y, w:ACM_W, h};
-    if(b===AC_BTN_TUP)  return {x:ACS_X0,                       y, w:ACS_BTN_W, h};
+    if(b===AC_BTN_TDN)  return {x:ACS_X0,                       y, w:ACS_BTN_W, h};
     if(b===AC_BTN_TEMP) return {x:ACS_X0+ACS_BTN_W,             y, w:ACS_VAL_W, h};
     return {x:ACS_X0+ACS_BTN_W+ACS_VAL_W,                       y, w:ACS_BTN_W, h};
   }
@@ -626,7 +650,10 @@ function wStepBtn(r,up,vis){
   // read as muted rather than "popping" here) — but only at rest; pressed
   // and disabled still take c.fg, same as screen.cpp.
   const chevFg=(vis==='pressed'||vis==='disabled')?c.fg:(up?C.ERROR:C.DOWN);
-  icoChevron(r.x+r.w/2,r.y+r.h/2,up,chevFg,6,4);
+  // Rotated 90 deg from the plain up/down glyph — right for warmer, left for
+  // cooler — on request, so the stepper doesn't read as the scroll gutter's
+  // arrows in miniature. See screen.cpp's wStepBtn.
+  icoChevron(r.x+r.w/2,r.y+r.h/2,up?'right':'left',chevFg,6,4);
 }
 function wSwatch(cx,cy,r,colour,vis){
   if(vis==='active'){ disc(cx,cy,r-2,colour); disc(cx,cy,r,null,colour); }
@@ -714,17 +741,18 @@ function icoRotate(cx,cy,c){
   tri([cx+3,cy-1,cx+8,cy-1,cx+6,cy+4],c);
   tri([cx-3,cy+1,cx-8,cy+1,cx-6,cy-4],c);
 }
-function icoWifi(cx,cy,bars,on,off){
-  for(let i=0;i<3;i++){
-    const h=4+i*3;
-    g.fillStyle=i<bars?on:off;
-    g.fillRect(cx-5+i*4,cy+5-h,2,h);
-  }
+function icoChevron(cx,cy,dir,c,hw,hh){
+  // dir: 'up'/'down'/'left'/'right'. hw is the base half-length (perpendicular
+  // to the point), hh the apex offset from centre along the point — passing
+  // the same two numbers into a rotated dir rotates this triangle with them.
+  const pts={
+    up:   [cx-hw,cy+hh,cx+hw,cy+hh,cx,cy-hh],
+    down: [cx-hw,cy-hh,cx+hw,cy-hh,cx,cy+hh],
+    right:[cx-hh,cy-hw,cx-hh,cy+hw,cx+hh,cy],
+    left: [cx+hh,cy-hw,cx+hh,cy+hw,cx-hh,cy],
+  }[dir];
+  tri(pts,c);
 }
-function icoChevron(cx,cy,up,c,hw,hh){
-  tri(up?[cx-hw,cy+hh,cx+hw,cy+hh,cx,cy-hh]:[cx-hw,cy-hh,cx+hw,cy-hh,cx,cy+hh],c);
-}
-function icoBadge(cx,cy,c,ring){ disc(cx,cy,3,ring); disc(cx,cy,2,c); }
 
 // ── derived appearance, mirroring screen.cpp ─────────────────────────────────
 function bulbHue(d){
@@ -775,14 +803,18 @@ function roomTempText(d){
   if(!d.known||!d.avail||d.room==null) return {s:'--',deg:false};
   return {s:`${d.room}`,deg:true};
 }
+// Digits only — the "%" is drawn separately and a size smaller by
+// drawStatusRoom(), mirroring the firmware. Still the whole string the dirty
+// compare keys on there, so the split costs that nothing.
 function humidityText(d){
   if(!d.known||!d.avail||d.humidity==null) return '';
-  return `${d.humidity}%`;
+  return `${d.humidity}`;
 }
 
 // ── pages ────────────────────────────────────────────────────────────────────
 function drawDevices(){
   dev.forEach((d,i)=>{
+    if(i===0 && noConnShown()) return;   // band 0 belongs to the banner
     const top=cardTop(i), err=isErr(), ac=(d.kind==='climate');
     // The outline is the card's alarm channel: a failed call flashes it, and an
     // OFFLINE device holds it. That second use is what replaced the word on the
@@ -865,8 +897,8 @@ function drawSceneScrollbar(){
   const maxRow=sceneMaxRow();
   if(maxRow===0) return;                       // empty gutter, dead to taps
   const cx=SCENE_SB_X0+SCENE_SB_W/2, bot=STATUS_Y0-1;
-  icoChevron(cx,ROWS_Y0+13,true, sceneRow===0     ?C.DISABLED:C.TEXT2,6,5);
-  icoChevron(cx,bot-13,   false, sceneRow>=maxRow ?C.DISABLED:C.TEXT2,6,5);
+  icoChevron(cx,ROWS_Y0+13,'up',   sceneRow===0     ?C.DISABLED:C.TEXT2,6,5);
+  icoChevron(cx,bot-13,   'down', sceneRow>=maxRow ?C.DISABLED:C.TEXT2,6,5);
 
   const tY=ROWS_Y0+SP_6, tH=(bot-SP_6)-tY;
   g.fillStyle=C.DIVIDER; g.fillRect(cx,tY,1,tH);
@@ -877,7 +909,12 @@ function drawSceneScrollbar(){
 
 function drawScenes(){
   const base=sceneRow*SCENE_COLS;
-  for(let slot=0;slot<SCENE_PER_PAGE;slot++) drawSceneTile(slot,base+slot);
+  for(let slot=0;slot<SCENE_PER_PAGE;slot++){
+    // The top tile row shares band 0 with the connectivity banner, which owns it
+    // while shown — including across a scroll, which repaints every tile.
+    if(slot<SCENE_COLS && noConnShown()) continue;
+    drawSceneTile(slot,base+slot);
+  }
   drawSceneScrollbar();
 }
 
@@ -893,6 +930,10 @@ function setIcon(row,cx,cy){
 }
 function drawSettings(){
   for(let r=0;r<SET_ROWS;r++){
+    // SET_ROW_BRI is 0, so the brightness card shares band 0 with the banner and
+    // is skipped whole while it shows. The other three rows still draw — and they
+    // are the ones that still work, since no Settings row touches HA.
+    if(r===SET_ROW_BRI && noConnShown()) continue;
     const top=cardTop(r);
     rect(CARD_X,top,CARD_W,CARD_H,C.SURFACE,C.BORDER);
     if(r===SET_ROW_BRI){
@@ -925,41 +966,50 @@ function drawSettings(){
 }
 
 // Mirrors tabRect() in screen.cpp: each tab's cell hugs its OWN label (measured
-// via textW, not a shared width constant), with the leftover TAB_STRIP_W split
-// evenly as a margin on the two OUTER edges rather than spent as slack inside
-// every cell — see the TAB_STRIP_W comment in config.h for why a uniform cell
-// couldn't produce a tight-looking gap no matter how it was split.
+// via textW, not a shared width constant), and the strip is FLUSH LEFT at
+// TAB_X0 (0) with all the leftover TAB_STRIP_W collecting as one right-hand
+// margin before the room reading. It used to be centred, which made sense while
+// TAB_X0 was 26 and the left margin was really the gap to the connectivity
+// glyph; with that glyph deleted the same split left ~22px of blank bottom-left
+// corner, so the tabs were anchored to the edge on request.
 let _tabCells=null;
 function tabRect(i){
   if(!_tabCells){
     const w=TAB_LABEL.map(t=>textW('MICRO',t)+2*TAB_LBL_DX);
     const total=w.reduce((a,b)=>a+b,0)+(TAB_COUNT-1)*TAB_GAP;
-    let cx=TAB_X0+Math.floor((TAB_STRIP_W-total)/2);
+    let cx=TAB_X0;
     _tabCells=w.map(cw=>{ const cell={x:cx,w:cw}; cx+=cw+TAB_GAP; return cell; });
     if(total>TAB_STRIP_W) warn(`tab labels (${total}px incl. gaps) overrun the ${TAB_STRIP_W}px strip`);
   }
   return _tabCells[i];
 }
 
-// Mirrors drawStatusRoom() in screen.cpp: <temp><ring> <humidity> / , left-
-// aligned from the room region's left edge, immediately before the clock.
-// dev[NUM_BULBS] is the AC (config.h: "Devices 0..2 are the bulbs, device 3
-// is the AC"), same assumption the firmware makes. Temperature and humidity
-// are TITLE now (bumped from MICRO to match the clock beside them); the "/"
-// separator stayed MICRO, being punctuation rather than data.
+// Mirrors drawStatusRoom() in screen.cpp: <temp><ring> <humidity>%, left-aligned
+// from the room region's left edge, immediately before the clock. dev[NUM_BULBS]
+// is the AC (config.h: "Devices 0..2 are the bulbs, device 3 is the AC"), same
+// assumption the firmware makes.
+//
+// The numbers are NUM now; the "%" stays TITLE and rides the big digits' BASELINE
+// (BASE.NUM - BASE.TITLE), since an M* datum centres each role on its own box and
+// the same cy would leave it floating mid-height. The old trailing "/" is gone.
 function drawStatusRoom(){
   const d=dev[NUM_BULBS], err=isErr();
   const fg=(err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT2);
   const room=roomTempText(d), hum=humidityText(d);
+  const pctCy=STATUS_CY+(BASE.NUM-BASE.TITLE);
   let x=SCR_W-STATUS_ROOM_W-STATUS_CLK_W;
-  gtext('TITLE',room.s,x,STATUS_CY,'left',fg);
-  x+=textW('TITLE',room.s);
-  if(room.deg){ disc(x+3,STATUS_CY+INK_TOP.TITLE+2,2,null,fg); x+=5; }
+  gtext('NUM',room.s,x,STATUS_CY,'left',fg);
+  x+=textW('NUM',room.s);
+  if(room.deg){ disc(x+3,STATUS_CY+INK_TOP.NUM+2,2,null,fg); x+=5; }
   x+=SP_1;
-  if(hum){ gtext('TITLE',hum,x,STATUS_CY,'left',fg); x+=textW('TITLE',hum)+SP_1; }
-  gtext('MICRO','/',x,STATUS_CY,'left',C.TEXT3);
-  if(x+textW('MICRO','/')>SCR_W-STATUS_CLK_W)
-    warn(`header room reading runs into the clock region (ends x=${x+textW('MICRO','/')})`);
+  if(hum){
+    gtext('NUM',hum,x,STATUS_CY,'left',fg);
+    x+=textW('NUM',hum);
+    gtext('TITLE','%',x,pctCy,'left',fg);
+    x+=textW('TITLE','%');
+  }
+  if(x>SCR_W-STATUS_CLK_W)
+    warn(`header room reading runs into the clock region (ends x=${x})`);
 }
 
 function draw(){
@@ -969,12 +1019,7 @@ function draw(){
   const shiftLadder=checkShiftDistinct();
   g.fillStyle=C.BG; g.fillRect(0,0,SCR_W,SCR_H);
 
-  // header: glyph | tabs | room reading | clock, tiling the bar exactly
-  if(!wifiOk) icoWifi(STATUS_ICO_CX,STATUS_CY,0,C.ERROR,C.ERROR);
-  else {
-    icoWifi(STATUS_ICO_CX,STATUS_CY,3,C.TEXT3,C.DIVIDER);
-    if(!haOk) icoBadge(STATUS_ICO_CX+6,STATUS_CY-6,C.WARNING,C.BG);
-  }
+  // header: tabs | room reading | clock, tiling the bar exactly
   // The cell is the clear rect in drawTab(), and handing it to wTab is what puts
   // the underline on the first row below the rule.
   for(let i=0;i<TAB_COUNT;i++){
@@ -985,27 +1030,55 @@ function draw(){
 
   drawStatusRoom();
 
-  // 24h clock in Asia/Bangkok, matching the firmware's NTP + TZ_INFO="ICT-7"
+  // 24h clock in Asia/Bangkok, matching the firmware's NTP + TZ_INFO="ICT-7".
+  // NUM now, same as the room reading beside it.
   const clk=new Date().toLocaleTimeString('en-GB',
               {timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'});
-  gtext('TITLE',clk,SCR_W-SP_2+2,STATUS_CY,'right',C.TEXT);
-  const clkW=textW('TITLE',clk), clkLeft=(SCR_W-SP_2+2)-clkW;
+  gtext('NUM',clk,SCR_W-SP_2+2,STATUS_CY,'right',C.TEXT);
+  const clkW=textW('NUM',clk), clkLeft=(SCR_W-SP_2+2)-clkW;
   if(clkLeft < SCR_W-STATUS_CLK_W)
     warn(`clock "${clk}" (${clkW}px) starts at x=${clkLeft}, inside the room region (starts ${SCR_W-STATUS_CLK_W})`);
+  // The live clock is always "HH:MM"-shaped, so check the pre-NTP placeholder too
+  // — it is the one clock string the browser will never hand us.
+  if((SCR_W-SP_2+2)-textW('NUM','--:--') < SCR_W-STATUS_CLK_W)
+    warn(`clock placeholder "--:--" (${textW('NUM','--:--')}px) starts inside the room region`);
   g.fillStyle=C.DIVIDER; g.fillRect(0,STATUS_DIV_Y,SCR_W,1);
 
   if(page===PAGE_SCENES)        drawScenes();
   else if(page===PAGE_SETTINGS) drawSettings();
   else                          drawDevices();
 
+  // LAST, and over the page: it is an overlay on whatever was just drawn. The
+  // firmware needs a dirty-compare and an invalidate on the falling edge to
+  // restore the content underneath (see drawNoConn(), screen.cpp); here draw()
+  // repaints the whole canvas every call, so an unconditional draw is enough.
+  if(noConnShown()){
+    // The CURRENT PAGE's first row, because the two grids don't share a pitch: a
+    // 52px band leaves 12px of a 64px scene tile showing. On Scenes it also stops
+    // at the scroll gutter, which is its own region — clearing across it erased
+    // the up arrow, and in the firmware nothing would have put it back.
+    const scenes=(page===PAGE_SCENES);
+    g.fillStyle=C.BG;
+    g.fillRect(0,rowTop(0),scenes?SCENE_SB_X0:SCR_W,scenes?SCENE_TILE_H:ROW_H);
+    wChip({x:NOCONN_X0,y:NOCONN_Y0,w:NOCONN_W,h:NOCONN_H},
+          'No Connection',null,'err','connectivity overlay');
+  }
+
   // ── the same static_asserts screen.cpp makes ──
-  if(STATUS_ICO_W!==TAB_X0) warn('header: gap between the status glyph and the tabs');
-  // TAB_STRIP_W is now DERIVED from STATUS_ROOM_W, STATUS_CLK_W and TAB_X0
-  // (see its const above), so "tabs and the room/clock block do not meet" can
-  // no longer go wrong — there is nothing left to assert there. tabRect()
-  // warns separately if the labels ever overrun TAB_STRIP_W (19px of margin
-  // now — see STATUS_ROOM_W's comment above for why that grew back up rather
-  // than staying as tight as TAB_GAP's own cut alone would have left it).
+  // TAB_STRIP_W is DERIVED from STATUS_ROOM_W, STATUS_CLK_W and TAB_X0 (see its
+  // const above), so "tabs and the room/clock block do not meet" cannot go
+  // wrong, and the glyph/tab-strip seam that used to be asserted here is gone
+  // with the glyph itself (TAB_X0 is 0 now). tabRect() warns separately if the
+  // labels ever overrun TAB_STRIP_W — 45px of margin now, the old 19px plus the
+  // 26px the glyph freed.
+  // The banner must sit wholly inside the band it clears — the band is what
+  // removes the content underneath, so anything hanging out of it would be drawn
+  // over pixels nothing cleared, which is the fragment problem it exists to fix.
+  if(NOCONN_Y0 < ROWS_Y0 || NOCONN_Y0+NOCONN_H > ROWS_Y0+ROW_H)
+    warn(`no-connection banner y${NOCONN_Y0}..${NOCONN_Y0+NOCONN_H-1} hangs out of band 0 (${ROWS_Y0}..${ROWS_Y0+ROW_H-1})`);
+  if(NOCONN_X0 < 0 || NOCONN_X0+NOCONN_W > SCR_W) warn('no-connection banner is wider than the screen');
+  if(textW('BODY','No Connection') > NOCONN_W-2*SP_1)
+    warn(`"No Connection" (${textW('BODY','No Connection')}px) does not fit the banner's ${NOCONN_W-2*SP_1}px budget`);
   if(TAB_UL_Y<=STATUS_DIV_Y) warn('tab underline overruns the header divider');
   if(TAB_UL_Y!==STATUS_DIV_Y+1) warn('the tab cell does not seat the underline at TAB_UL_Y');
   // Two things the compiler cannot see. The label's ink must stop below the bar
@@ -1061,17 +1134,30 @@ function draw(){
   // tiled grid (the content is proportional and optional-humidity), so this
   // checks the worst REALISTIC case fits rather than an exact equation — the
   // same kind of check the AC's identity column used to need before the
-  // reading moved here. "99%", not "100%": an indoor AC'd bedroom sensor
+  // reading moved here. "99", not "100": an indoor AC'd bedroom sensor
   // doesn't read 100% relative humidity, so budgeting for it was the same
   // error the temperature side (2 digits, not ha.cpp's full -10..60 sanity
-  // band) already knew to avoid. drawStatusRoom() above builds the same
-  // string in TITLE (not MICRO, since the temperature/humidity were bumped a
-  // size); this mirrors it with the worst-case inputs rather than whatever
-  // the current dev[3] shows.
+  // band) already knew to avoid. Mirrors drawStatusRoom()'s pieces above —
+  // NUM digits, a TITLE "%", no "/" — with worst-case inputs rather than
+  // whatever the current dev[3] shows.
   {
-    const roomW=textW('TITLE','27')+5+SP_1+textW('TITLE','99%')+SP_1+textW('MICRO','/');
+    const roomW=textW('NUM','27')+5+SP_1+textW('NUM','99')+textW('TITLE','%');
     if(roomW>STATUS_ROOM_W)
       warn(`header room reading worst case (${roomW}px) exceeds its ${STATUS_ROOM_W}px budget`);
+    // The leftover is the deliberate gap before the clock now that the "/" is
+    // gone, so it must not reach zero the way the F_TITLE version's did.
+    if(STATUS_ROOM_W-roomW < SP_1)
+      warn(`header room reading leaves only ${STATUS_ROOM_W-roomW}px before the clock (want >= ${SP_1})`);
+  }
+  // VERTICAL fit, which only became a question when these two regions went to
+  // F_NUM: its box is 26px against F_TITLE's 16 in a 31px band, and ROLE_DY
+  // seats it 4px low. Checks the ink envelope, not the box — the box's last row
+  // is always blank and text is drawn transparent, so a box overhang costs
+  // nothing while an ink overhang would clip against the screen edge.
+  {
+    const top=STATUS_CY+INK_TOP.NUM, bot=STATUS_CY+INK_BOT.NUM;
+    if(top<STATUS_DIV_Y+1 || bot>SCR_H-1)
+      warn(`header F_NUM ink (y ${top}..${bot}) leaves the band y ${STATUS_DIV_Y+1}..${SCR_H-1}`);
   }
   if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H!==STATUS_Y0)
     warn(`scene grid does not fill the body (${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H} of ${STATUS_Y0})`);
@@ -1095,7 +1181,12 @@ function draw(){
   let out=`<span class="hd">page</span> ${TAB_LABEL[page]}   `+
           `<span class="hd">body</span> ${ROWS_Y0}..${ROWS_Y0+NUM_DEVICES*ROW_H-1}\n`;
   const tabCellsStr=TAB_LABEL.map((t,i)=>{const c=tabRect(i);return `${t}:${c.x}..${c.x+c.w-1}`;}).join(' ');
-  out+=`header  y ${STATUS_Y0}..${SCR_H-1} | glyph x 0..${STATUS_ICO_W-1} | tabs ${TAB_X0}..${TAB_X0+TAB_STRIP_W-1} [${tabCellsStr}] (${TAB_GAP}px gaps) | room ${SCR_W-STATUS_ROOM_W-STATUS_CLK_W}..${SCR_W-STATUS_CLK_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
+  out+=`header  y ${STATUS_Y0}..${SCR_H-1} | tabs ${TAB_X0}..${TAB_X0+TAB_STRIP_W-1} [${tabCellsStr}] (${TAB_GAP}px gaps) | room ${SCR_W-STATUS_ROOM_W-STATUS_CLK_W}..${SCR_W-STATUS_CLK_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
+  {
+    const roomW=textW('NUM','27')+5+SP_1+textW('NUM','99')+textW('TITLE','%');
+    out+=`  NUM    room worst ${roomW}/${STATUS_ROOM_W} (${STATUS_ROOM_W-roomW}px gap before clock) | clock "23:45" ${textW('NUM','23:45')}/${STATUS_CLK_W} | ink y ${STATUS_CY+INK_TOP.NUM}..${STATUS_CY+INK_BOT.NUM} in ${STATUS_DIV_Y+1}..${SCR_H-1}\n`;
+  }
+  out+=`noconn  x ${NOCONN_X0}..${NOCONN_X0+NOCONN_W-1} | y ${NOCONN_Y0}..${NOCONN_Y0+NOCONN_H-1} in band ${rowTop(0)}..${rowTop(0)+ROW_H-1} | ${haOk?'hidden (haOk)':'SHOWN, band cleared'}\n`;
   out+=`card    x ${CARD_X}..${CARD_X+CARD_W-1}, content ${CARD_IN_X0}..${CARD_IN_X1} (${CARD_IN_W}px)\n`;
   out+=`bulb    id ${CARD_IN_X0}..${BULB_CTL_X0-1} (name ${BULB_NAME_W}px) | chips ${BULB_CTL_X0}..${SW_X0-1} (${BULB_CHIP_W}x${BULB_CTL_H}) | swatches ${SW_X0}..${SW_X0+2*SW_CELL_W-1}\n`;
   out+=`ac      id ${CARD_IN_X0}..${BULB_CTL_X0-1} | chips ${BULB_CTL_X0}..${ACS_X0-1} | stepper ${ACS_X0}..${ACS_X0+2*ACS_BTN_W+ACS_VAL_W-1}\n`;
@@ -1210,7 +1301,11 @@ if(Q.has('flip'))   set.flip=Q.get('flip')!=='0';
 if(Q.has('bri'))    set.briIdx=Math.max(0,Math.min(BRI_STEPS-1,+Q.get('bri')));
 if(Q.has('stale'))  stale=Q.get('stale')!=='0';
 if(Q.has('ha'))     haOk=Q.get('ha')!=='0';
-if(Q.has('wifi'))   wifiOk=Q.get('wifi')!=='0';
+// Mirrors updateNetState() (main.cpp): Wi-Fi going down forces haOk false,
+// because servicePoll() is skipped while Wi-Fi is down and nothing else would
+// ever clear it. One-directional on purpose — Wi-Fi coming back does NOT set
+// haOk true, since the firmware only does that after a real successful poll.
+if(Q.has('wifi'))   { wifiOk=Q.get('wifi')!=='0'; if(!wifiOk) haOk=false; }
 if(Q.has('name'))   dev[0].name=Q.get('name');
 if(Q.has('mode'))   dev[3].mode=Q.get('mode');
 if(Q.has('avail'))  dev[1].avail=Q.get('avail')!=='0';

@@ -17,7 +17,7 @@ static const uint8_t ROLE_FONT[F_ROLES] = { 4, 2, 2, 1 };
 // tall, baseline 19) but every glyph sits inset inside it — Font 2's caps start
 // 3 rows down, Font 4's 1 row down — so the nominal numbers put an ornament in
 // the wrong place. scripts/font_metrics.py decodes the glyph data and prints
-// these three tables; re-run it, don't nudge them by eye.
+// these tables; re-run it, don't nudge them by eye.
 //
 //   role     face     ink        baseline  cap height
 //   F_NUM    Font 4   cy-8..+15  cy+10     18px
@@ -26,6 +26,15 @@ static const uint8_t ROLE_FONT[F_ROLES] = { 4, 2, 2, 1 };
 //   F_MICRO  Font 1   cy-4..+3   cy+3       7px
 static const int8_t ROLE_INK_TOP[F_ROLES] = { -8, -5, -5, -4 };
 static const int8_t ROLE_INK_BOT[F_ROLES] = { 15,  7,  7,  3 };
+
+// The baseline column of the same table, exposed because MIXING TWO ROLES ON ONE
+// LINE needs it: an M* datum centres each role on its own box, so two roles drawn
+// at the same cy do not share a baseline. The header's room reading draws a small
+// F_TITLE "%" after big F_NUM digits and has to sit them on one line
+// (drawStatusRoom()); the difference of two entries here is that offset. Ink
+// extents cannot answer it — those are envelopes, and neither digits nor "%" have
+// descenders, so aligning ink bottoms would align the wrong rows.
+static const int8_t ROLE_BASE[F_ROLES] = { 10,  5,  5,  3 };
 
 // Datum compensation, added to cy inside textAt(). TFT_eSPI centres a GFX free
 // font on its ASCENT but a built-in font on its FULL BOX (drawString: `cheight =
@@ -55,6 +64,7 @@ void fontSet(FontRole r) {
 
 int16_t fontInkTop(FontRole r)    { return ROLE_INK_TOP[roleOf(r)]; }
 int16_t fontInkBottom(FontRole r) { return ROLE_INK_BOT[roleOf(r)]; }
+int16_t fontBaseline(FontRole r)  { return ROLE_BASE[roleOf(r)]; }
 
 int16_t textW(FontRole r, const char* s) {
   if (!s || !*s) return 0;

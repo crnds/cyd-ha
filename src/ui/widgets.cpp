@@ -58,7 +58,10 @@ void wStepBtn(int16_t x, int16_t y, int16_t w, int16_t h, bool up, uint8_t vis) 
   const uint16_t chevFg = (vis == BV_PRESSED || vis == BV_DISABLED)
                                ? c.fg
                                : (up ? C_ERROR : C_DOWN);
-  icoChevron(x + w / 2, y + h / 2, up, chevFg, 6, 4);
+  // Drawn rotated 90 deg from the plain up/down glyph — right for warmer,
+  // left for cooler — on request, so the stepper's chevrons don't read as
+  // the scroll gutter's arrows in miniature.
+  icoChevron(x + w / 2, y + h / 2, up ? CHEV_RIGHT : CHEV_LEFT, chevFg, 6, 4);
 }
 
 void wSwatch(int16_t cx, int16_t cy, int16_t r, uint16_t colour, uint8_t vis) {

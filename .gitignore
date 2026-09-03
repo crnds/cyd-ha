@@ -7,3 +7,6 @@
 # Real HA token + entity IDs. Template lives in include/secrets.h.example.
 # This file grants FULL control of Home Assistant — never commit it.
 include/secrets.h
+
+# Python bytecode cache from scripts/*.py
+scripts/__pycache__/
