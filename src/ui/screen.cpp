@@ -228,8 +228,33 @@ static constexpr uint16_t SCENE_MAX_ROW =
 //
 // Each snapshot also needs its own `valid` flag on top, because BV_INACTIVE is 0
 // and a memset alone reads as "already drawn as inactive".
+// Raw-input fingerprint for drawDeviceCard()'s pre-filter (see there): every
+// field the function's drawing decisions read, exactly as read, before any
+// derivation. If this is bit-identical to last pass the render inputs cannot
+// have changed, so the whole function can return before doing any work at
+// all — the iconVis()/bulbHue() colour maths, tempText()'s formatting, the
+// button loop's up-to-6 btnActive() calls. The existing per-region/per-button
+// compares stay the authority on what actually repaints; this only ever
+// skips work they would also have skipped.
+//
+// Floats are compared by BIT PATTERN, not by ==: d.target can be NaN (see
+// state.h) and NaN != NaN, so an == compare would never early-out while a
+// value is genuinely unknown — the opposite of the intent. memcmp over the
+// whole struct gets this for free as long as every write zero-inits the
+// padding first (see drawDeviceCard) — an uninitialized pad byte would only
+// cost a missed early-out, never a wrong one.
+struct CardFingerprint {
+  bool   on, avail, known, supportsCT;
+  int    pct, kelvin;
+  float  target;
+  char   mode[sizeof(DeviceState::mode)];
+  bool   stale, err, alarm;
+  int8_t press;
+};
+
 struct RowSnap {
   bool     valid;
+  CardFingerprint fp;            // see above; compared before anything else
   char     tempStr[8];          // AC row only: last rendered setpoint
   bool     stale;
   bool     err;
@@ -276,10 +301,22 @@ static SettingSnap setSnap;
 //
 // tabVis rather than a bare `page`: it encodes the active page AND handles
 // press-flash expiry, which a page field could not.
+// Raw-input fingerprint for drawStatusRoom()'s pre-filter — same idea and same
+// caution as CardFingerprint above (float compared by bit pattern: d.room can
+// be NaN). Lets the function skip its two snprintf()s and two strcmp()s
+// entirely when nothing that feeds them has moved, rather than doing that
+// work every pass and only avoiding the *draw*.
+struct RoomFingerprint {
+  bool  known, avail, stale, err;
+  int   humidity;
+  float room;
+};
+
 struct StatusSnap {
   bool     valid;
   int16_t  hhmm;    // local time as hour*60+min; -1 while NTP is unsynced
   uint8_t  tabVis[TAB_COUNT];
+  RoomFingerprint roomFp;  // see above; compared before any formatting
   char     roomStr[8];   // last rendered room temperature (relocated from the
                          // AC card's own RowSnap — see drawStatusRoom())
   char     humStr[8];    // last rendered humidity
@@ -677,6 +714,20 @@ static void drawDeviceCard(uint8_t dev, bool force) {
   // paint every card red for the first 1.5 s after boot.
   const bool alarm = err || !d.avail;
 
+  // Raw-input pre-filter. Everything below is read somewhere in this
+  // function's drawing decisions, so if none of it moved since last pass, no
+  // region's appearance can have changed either — every compare further down
+  // would no-op anyway, at the cost of an iconVis()/bulbHue() call and the
+  // button loop's btnActive() calls first. See CardFingerprint above.
+  CardFingerprint fp;
+  memset(&fp, 0, sizeof(fp));
+  fp.on = d.on; fp.avail = d.avail; fp.known = d.known; fp.supportsCT = d.supportsCT;
+  fp.pct = d.pct; fp.kelvin = d.kelvin; fp.target = d.target;
+  memcpy(fp.mode, d.mode, sizeof(fp.mode));
+  fp.stale = stale; fp.err = err; fp.alarm = alarm; fp.press = press;
+  if (!first && memcmp(&fp, &sn.fp, sizeof(fp)) == 0) return;
+  sn.fp = fp;
+
   // On a first/forced draw, clear the whole row BAND and lay the card down. The
   // band is full width and the four bands tile the body exactly, which is what
   // makes this page self-clearing: the per-region clears below cover only the
@@ -894,6 +945,16 @@ static void drawStatusRoom(bool force) {
   const bool stale = d.known && (now - d.okMs > DEVICE_STALE_MS);
   const bool err   = d.errMs && (now - d.errMs < 1500);
   const uint16_t fg = (err || !d.avail) ? C_ERROR : (stale ? C_DIM : C_TEXT2);
+
+  // Raw-input pre-filter (see RoomFingerprint above): skip the snprintf()s
+  // and strcmp()s below entirely when nothing that feeds them has moved,
+  // rather than doing that work every pass and only avoiding the draw.
+  RoomFingerprint rfp;
+  memset(&rfp, 0, sizeof(rfp));
+  rfp.known = d.known; rfp.avail = d.avail; rfp.stale = stale; rfp.err = err;
+  rfp.humidity = d.humidity; rfp.room = d.room;
+  if (!force && memcmp(&rfp, &statusSnap.roomFp, sizeof(rfp)) == 0) return;
+  statusSnap.roomFp = rfp;
 
   char room[8]; bool degree;
   roomTempText(d, room, sizeof(room), degree);
