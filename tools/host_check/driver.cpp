@@ -314,6 +314,32 @@ static void sweepDirtyRegions() {
   printf("ac mode-off delta=%ld\n", drawDeviceCardOnce(NUM_BULBS, false));
   printf("ac repeat-mode-off delta=%ld\n", drawDeviceCardOnce(NUM_BULBS, false));
 
+  printf("== drawDeviceCard press-flash deltas ==\n");
+  // pressKind defaults to HIT_NONE, so nothing above this point ever
+  // exercised pressedNow()'s true branch. That matters here specifically:
+  // the press flash expires by TIME, not by any state change (CLAUDE.md),
+  // which is exactly the class of bug a fingerprint/dirty-region refactor
+  // could reintroduce by leaving a time-derived flag out of a compare.
+  screenInvalidate();
+  hostSetMillis(4000);
+  S.dev[1].on = false;  // bulb 1, left in resetDevices()'s default state
+  drawDeviceCardOnce(1, true);  // clean baseline snapshot, not itself asserted
+  for (uint8_t b = 0; b < BULB_BTNS; b++) {
+    S.pressKind = HIT_ROW; S.pressIdx = 1; S.pressSub = (int8_t)b; S.pressMs = g_millis;
+    printf("bulb press b=%d start delta=%ld\n", b, drawDeviceCardOnce(1, false));
+    printf("bulb press b=%d repeat delta=%ld\n", b, drawDeviceCardOnce(1, false));
+    hostSetMillis(g_millis + PRESS_FLASH_MS + 1);
+    printf("bulb press b=%d expired delta=%ld\n", b, drawDeviceCardOnce(1, false));
+    S.pressKind = HIT_NONE; S.pressIdx = -1; S.pressSub = -1; S.pressMs = 0;
+    printf("bulb press b=%d cleared-repeat delta=%ld\n", b, drawDeviceCardOnce(1, false));
+  }
+  // Page-safety: a press recorded against a DIFFERENT device row must not
+  // repaint this one (pressKind/pressIdx are what stop a scene tap at index 2
+  // from also inverting row 2 on the Devices page — see CLAUDE.md).
+  S.pressKind = HIT_ROW; S.pressIdx = 2; S.pressSub = 0; S.pressMs = g_millis;
+  printf("bulb press-on-other-row delta=%ld\n", drawDeviceCardOnce(1, false));
+  S.pressKind = HIT_NONE; S.pressIdx = -1; S.pressSub = -1; S.pressMs = 0;
+
   printf("== drawStatusRoom dirty-region deltas ==\n");
   screenInvalidate();
   hostSetMillis(3000);

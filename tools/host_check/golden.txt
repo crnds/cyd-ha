@@ -8363,6 +8363,32 @@ ac mode-cool delta=17
 ac repeat-mode-cool delta=0
 ac mode-off delta=34
 ac repeat-mode-off delta=0
+== drawDeviceCard press-flash deltas ==
+bulb press b=0 start delta=6
+bulb press b=0 repeat delta=0
+bulb press b=0 expired delta=6
+bulb press b=0 cleared-repeat delta=0
+bulb press b=1 start delta=6
+bulb press b=1 repeat delta=0
+bulb press b=1 expired delta=6
+bulb press b=1 cleared-repeat delta=0
+bulb press b=2 start delta=6
+bulb press b=2 repeat delta=0
+bulb press b=2 expired delta=6
+bulb press b=2 cleared-repeat delta=0
+bulb press b=3 start delta=6
+bulb press b=3 repeat delta=0
+bulb press b=3 expired delta=6
+bulb press b=3 cleared-repeat delta=0
+bulb press b=4 start delta=1
+bulb press b=4 repeat delta=0
+bulb press b=4 expired delta=2
+bulb press b=4 cleared-repeat delta=0
+bulb press b=5 start delta=1
+bulb press b=5 repeat delta=0
+bulb press b=5 expired delta=2
+bulb press b=5 cleared-repeat delta=0
+bulb press-on-other-row delta=0
 == drawStatusRoom dirty-region deltas ==
 room first-draw delta=6
 room repeat-unchanged delta=0
