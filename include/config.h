@@ -127,6 +127,23 @@
 
 // ── Backlight ────────────────────────────────────────────
 #define BL_CHANNEL     0
+// 25 kHz because 5 kHz was AUDIBLE on this unit — a constant high-pitched
+// whine from the panel's backlight drive circuit, at every brightness step
+// except 100%. 5 kHz sits near the peak of human hearing sensitivity, and
+// what pinned the diagnosis was that 100% is silent: esp32-hal-ledc.c
+// promotes a duty of exactly (1 << bits) - 1 to (1 << bits), i.e. 255 becomes
+// a constant DC high with no edges at all, while the other four steps switch
+// 5000 times a second. So the top step never drove the circuit and never sang.
+// The frequency was original (baseline 113505c) and only became audible when
+// brightness became a setting: the fixed BL_DUTY 230 it replaced sat near DC,
+// where switching energy is small, and BRI_DEFAULT's 128 is 50% duty, which is
+// the loudest point on the curve.
+// Constraint is BL_PWM_HZ * (1 << BL_PWM_BITS) <= 80 MHz; 25 kHz * 256 = 6.4
+// MHz, so there is a lot of room. Do NOT lower this back into the audible
+// band — and note that raising BL_PWM_BITS lowers the frequency ceiling, so
+// the two move against each other.
+#define BL_PWM_HZ      25000
+#define BL_PWM_BITS    8
 // Brightness is a setting now (Settings page, persisted in NVS) rather than a
 // fixed #define. Duty and label share one index (Settings::briIdx), so they are
 // declared together — splitting them across translation units is how they

@@ -1006,6 +1006,42 @@ UTC together — printing only local time would look plausible while being hours
 wrong, which is exactly the failure worth guarding against. Measured: local
 23:00:57 / UTC 16:00:57, and ~0 s skew against the host's `TZ=Asia/Bangkok date`.
 
+**The backlight PWM is 25 kHz because 5 kHz was AUDIBLE on this unit** — a
+constant high-pitched whine from the panel's backlight drive circuit, measured
+by ear rather than derived. `BL_PWM_HZ`/`BL_PWM_BITS` (`config.h`) replaced the
+bare `5000, 8` literals at the `ledcSetup()` call, and a `static_assert` in
+`main.cpp` now enforces `BL_PWM_HZ << BL_PWM_BITS <= 80 MHz`, since exceeding
+the LEDC source clock fails at *runtime* with a dead backlight. Four things
+worth keeping:
+
+- **What identified it was that 100% is SILENT and the other four steps are
+  not.** `esp32-hal-ledc.c:90-93` promotes a duty of exactly `(1 << bits) - 1`
+  to `(1 << bits)`, so `BRI_DUTY`'s 255 becomes a constant DC high with no edges
+  at all, while 3/64/128/191 switch 5000 times a second. The top step never
+  drove the circuit, so it never sang. That asymmetry is the diagnostic — a
+  whine at every step *including* 100% is not this.
+- **It was not a regression, and nothing on the branch caused it.** `git log
+  -S'ledcSetup' --all` returns only the baseline commit; the frequency never
+  moved. It became audible when brightness became a setting: the fixed
+  `BL_DUTY 230` it replaced sat near DC where switching energy is small, and
+  `BRI_DEFAULT`'s 128 is 50% duty — the loudest point on the curve. Don't go
+  looking in the render or refactor history for this one.
+- **Frequency and resolution move against each other**, so "just add
+  resolution" is not free: at 8 bits the ceiling is 80 MHz / 256 = 312.5 kHz,
+  but at 12 bits it is 19.5 kHz, i.e. back inside the audible band. 25 kHz is
+  deliberately above the ~20 kHz some people still hear. **Do not lower it.**
+- **The bottom step is the fragile one.** Duty 3/256 at 25 kHz is a ~0.47 us
+  pulse against 2.3 us at 5 kHz. If the 1% step ever comes up dark or unstable,
+  raise `BRI_DUTY_LIST`'s first entry — not the frequency.
+
+`ledcSetup()` returns the frequency it actually *achieved*, not the one it was
+asked for, so `setup()` logs both (`backlight pwm: asked .. got ..`). A clamped
+value shows up in the serial log instead of being re-diagnosed by ear.
+
+There is also a whine while *flashing*, and that one is not fixable here: in
+download mode the chip is in the bootloader, LEDC is not running and GPIO 21 is
+high-impedance, so no firmware constant governs the pin.
+
 **Backlight ordering is a trap.** The LEDC setup in `setup()` **must** come after
 `screenBegin()`: `TFT_eSPI::init()` does `pinMode(TFT_BL, OUTPUT); digitalWrite(
 TFT_BL, TFT_BACKLIGHT_ON)` (`TFT_eSPI.cpp:786`), reclaiming GPIO 21 and detaching

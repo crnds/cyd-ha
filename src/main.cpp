@@ -25,6 +25,17 @@
 AppState S;
 
 static const uint8_t BRI_DUTY[BRI_STEPS] = BRI_DUTY_LIST;
+// The LEDC timer divides the 80 MHz APB clock, so frequency and duty
+// resolution trade against each other. Exceeding this makes ledc_timer_config
+// fail at RUNTIME (a log line and a dead backlight), which is a poor way to
+// find out; BL_PWM_HZ's comment explains why the frequency must not drop back
+// under ~20 kHz to buy resolution.
+static_assert((uint64_t)BL_PWM_HZ << BL_PWM_BITS <= 80000000ULL,
+              "BL_PWM_HZ * 2^BL_PWM_BITS exceeds the 80 MHz LEDC source clock");
+// A duty wider than the resolution would silently wrap to a dim value.
+static_assert(BL_PWM_BITS == 8,
+              "BRI_DUTY_LIST is expressed out of 255; rescale it if the "
+              "resolution changes");
 
 // Software-SPI XPT2046 on the dedicated CYD touch pins. Used only for its
 // begin()/setCalibration() pin setup — reads go through xptRead() below.
@@ -978,7 +989,12 @@ void setup() {
   // (TFT_eSPI.cpp:786) which reclaims GPIO 21 as a plain output and detaches
   // any PWM already attached to it. Configuring LEDC first — as this used to —
   // left the duty silently ignored and the backlight pinned at 100%.
-  ledcSetup(BL_CHANNEL, 5000, 8);
+  // ledcSetup() returns the frequency it actually achieved, not what it was
+  // asked for, so log both: a clamped or rejected value shows up here rather
+  // than being re-diagnosed by ear. See BL_PWM_HZ in config.h for why 25 kHz.
+  const uint32_t blHz = ledcSetup(BL_CHANNEL, BL_PWM_HZ, BL_PWM_BITS);
+  Serial.printf("backlight pwm: asked %u Hz, got %u Hz\n",
+                (unsigned)BL_PWM_HZ, (unsigned)blHz);
   ledcAttachPin(PIN_BACKLIGHT, BL_CHANNEL);
   // Seeds all three memoised effects through the same path that maintains
   // them, so nothing can desync from the panel.
