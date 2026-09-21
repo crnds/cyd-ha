@@ -8328,13 +8328,21 @@ hitTest page=devices (0,239) -> kind=1 idx=0 sub=-1
 hitTest page=devices (319,239) -> kind=0 idx=-1 sub=-1
 hitTest page=devices (160,120) -> kind=2 idx=2 sub=2
 hitTest page=devices (10,210) -> kind=0 idx=-1 sub=-1
-hitTestHash page=scenes -> e361ea873498ef43
+hitTest page=devices (128,180) -> kind=2 idx=3 sub=1
+hitTest page=devices (250,180) -> kind=0 idx=-1 sub=-1
+hitTest page=devices (301,180) -> kind=2 idx=3 sub=3
+hitTest page=devices (160,145) -> kind=2 idx=2 sub=2
+hitTestHash page=scenes -> cc6c2c09a1b169eb
 hitTest page=scenes (0,0) -> kind=3 idx=0 sub=-1
 hitTest page=scenes (319,0) -> kind=0 idx=-1 sub=-1
 hitTest page=scenes (0,239) -> kind=1 idx=0 sub=-1
 hitTest page=scenes (319,239) -> kind=0 idx=-1 sub=-1
 hitTest page=scenes (160,120) -> kind=3 idx=4 sub=-1
 hitTest page=scenes (10,210) -> kind=0 idx=-1 sub=-1
+hitTest page=scenes (128,180) -> kind=2 idx=3 sub=1
+hitTest page=scenes (250,180) -> kind=0 idx=-1 sub=-1
+hitTest page=scenes (301,180) -> kind=2 idx=3 sub=3
+hitTest page=scenes (160,145) -> kind=0 idx=-1 sub=-1
 hitTestHash page=settings -> e3b0298f97063503
 hitTest page=settings (0,0) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (319,0) -> kind=0 idx=-1 sub=-1
@@ -8342,6 +8350,10 @@ hitTest page=settings (0,239) -> kind=1 idx=0 sub=-1
 hitTest page=settings (319,239) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (160,120) -> kind=5 idx=2 sub=-1
 hitTest page=settings (10,210) -> kind=0 idx=-1 sub=-1
+hitTest page=settings (128,180) -> kind=5 idx=3 sub=-1
+hitTest page=settings (250,180) -> kind=5 idx=3 sub=-1
+hitTest page=settings (301,180) -> kind=5 idx=3 sub=-1
+hitTest page=settings (160,145) -> kind=5 idx=2 sub=-1
 == drawDeviceCard dirty-region deltas ==
 bulb first-draw delta=41
 bulb repeat-unchanged delta=0

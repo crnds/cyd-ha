@@ -51,25 +51,39 @@ control *is* its colour). The AC's setpoint sits between the two chevrons that
 change it, and the dead cell between them is deliberate: it stops a slightly-off
 tap from stepping the wrong way.
 
-**Scenes** — macros over the three bulbs (the AC is not touched), in a 3-column
-grid. Five are defined; nine fit on screen, and past that the page scrolls a page
-at a time from the gutter on the right.
+**Scenes** — macros over the three bulbs (no scene touches the AC), in a
+3-column grid, with the **AC card copied down from the Devices page** pinned
+below it so the one device a scene deliberately cannot reach is still one tap
+away. Five scenes are defined; six fit on screen, and past that the page scrolls
+a page at a time from the gutter on the right.
 
 ```
 ┌────────────────────────────────────────────────┐
-│ ⠿   Devices   ( Scenes )  Settings       23:00 │
-├────────────────────────────────────────────────┤
 │ ╭──────────╮ ╭──────────╮ ╭──────────╮      ▲ │
 │ │  ○ ○ ○   │ │  ○ ○ ●   │ │  ● ● ●   │      ▪ │
 │ │   OFF    │ │  RELAX   │ │   WORK   │      ▪ │
 │ ╰──────────╯ ╰──────────╯ ╰──────────╯      ▪ │
 │ ╭──────────╮ ╭──────────╮                   ▪ │
 │ │  ● ● ●   │ │  ● ● ●   │                   ▪ │
-│ │  AWAKE   │ │   DAY    │                   ▪ │
-│ ╰──────────╯ ╰──────────╯                   ▪ │
-│                                             ▼ │
+│ │  AWAKE   │ │   DAY    │                   ▼ │
+│ ╰──────────╯ ╰──────────╯                     │
+│                                                │
+│ ╭────────────────────────────────────────────╮ │
+│ │ ❄ AC  [ OFF ][ COOL ][ DRY ]  [▼] 24° [▲]  │ │
+│ ╰────────────────────────────────────────────╯ │
+├────────────────────────────────────────────────┤
+│  Devices   Scenes   Settings    27°55% 23:00   │
 └────────────────────────────────────────────────┘
 ```
+
+That card is not a scene and takes no part in one: it is the Devices page's AC
+card, drawn a second time at the identical rect, with the same chips, the same
+stepper, the same press flash and the same red border on a failed call. Tapping
+it on this page does exactly what tapping it on Devices does.
+
+The blank band between the last tile row and the card is deliberate — the tiles
+were kept at their original size rather than grown into it, so the two visible
+rows sit exactly where the first two always did.
 
 The three pips on a tile are one per bulb, read straight off the scene's own
 definition: a ring means that bulb will be off, a filled pip means on — amber for
@@ -77,11 +91,13 @@ definition: a ring means that bulb will be off, a filled pip means on — amber 
 captions the older full-width cards carried, which no longer fit and which could
 drift from what the tap actually sends.
 
-The grid is three columns rather than four so the name fits at full size; nine
-legible tiles beat twelve cramped ones, and the page still scales past a hundred.
+The grid is three columns rather than four so the name fits at full size; legible
+tiles beat a denser grid of cramped ones, and the page still scales past a
+hundred.
 
-The arrows and thumb only appear once the scene table outgrows one screen, so with
-five scenes the gutter is a plain margin and ignores taps. Adding a scene is one
+The arrows and thumb only appear once the scene table outgrows one screen — from
+the seventh scene on — so with five the gutter is a plain margin and ignores
+taps. Adding a scene is one
 line in `SCENE[]` in `src/ui/screen_scenes.cpp` — there is no count to update anywhere
 else, and the renderer's memory does not grow with the list.
 

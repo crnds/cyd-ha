@@ -2,9 +2,13 @@
 #include <string.h>
 
 // The Scenes page: macros over the three bulbs, in a scrolling 3-column grid
-// of 88x64 tiles. See screen_int.h for the cross-file contract, and
-// CLAUDE.md's "Scenes" / "The scene grid is built to scale" sections for the
-// design rationale.
+// of 88x64 tiles, TWO rows of them. The bottom row band of the body is not
+// this file's — the AC card is copied there from the Devices page, drawn by
+// screen.cpp's screenRender() calling straight into drawDeviceCard(), so
+// nothing here has to know about it beyond stopping at SCENE_AC_Y0. See
+// screen_int.h for the cross-file contract, config.h's Scenes block for why
+// the grid no longer fills the body, and CLAUDE.md's "Scenes" / "The scene
+// grid is built to scale" sections for the rest of the design rationale.
 
 // Macros over the three bulbs. The AC is deliberately untouched: it runs on a
 // different comfort schedule than the lighting, and folding it in would make
@@ -37,7 +41,9 @@ static const Scene SCENE[] = {
 static constexpr uint16_t SCENE_N = sizeof(SCENE) / sizeof(SCENE[0]);
 // Grid rows the table needs, and the largest scroll offset that still fills the
 // screen. SCENE_MAX_ROW is 0 today, which is what makes the whole scroll
-// affordance compile out and the page look exactly like a fixed one.
+// affordance compile out and the page look exactly like a fixed one. Note the
+// threshold moved when the AC card took a band and SCENE_VIS_ROWS went 3 -> 2:
+// scrolling now goes live at the 7th scene rather than the 10th.
 static constexpr uint16_t SCENE_ROWS_N = (SCENE_N + SCENE_COLS - 1) / SCENE_COLS;
 static constexpr uint16_t SCENE_MAX_ROW =
     SCENE_ROWS_N > SCENE_VIS_ROWS ? (uint16_t)(SCENE_ROWS_N - SCENE_VIS_ROWS) : 0;
@@ -204,13 +210,16 @@ static void drawSceneTile(uint8_t slot, uint16_t idx, uint8_t vis) {
 // just a 20px margin costing one fillRect — but the arrows, the track and the
 // thumb are all here ready for the first table entry that overflows the screen.
 static void drawSceneScrollbar(uint8_t pressed) {
-  // The body's own bottom edge (STATUS_Y0), not the panel's — the header now
-  // sits below it and must not be touched by this clear.
-  tft.fillRect(SCENE_SB_X0, ROWS_Y0, SCENE_SB_W, STATUS_Y0 - ROWS_Y0, C_BG);
+  // The GRID's bottom edge (SCENE_AC_Y0), which is neither the panel's nor the
+  // body's: the header sits below the body, and the AC card sits below the grid.
+  // The card is full card width, so it runs UNDER this column — clearing past
+  // SCENE_AC_Y0 would eat its top rows, and nothing would put them back until
+  // the next page switch.
+  tft.fillRect(SCENE_SB_X0, ROWS_Y0, SCENE_SB_W, SCENE_AC_Y0 - ROWS_Y0, C_BG);
   if (SCENE_MAX_ROW == 0) return;
 
   const int16_t cx  = SCENE_SB_X0 + SCENE_SB_W / 2;
-  const int16_t bot = STATUS_Y0 - 1;
+  const int16_t bot = SCENE_AC_Y0 - 1;
   const bool atTop = (S.sceneRow == 0), atBot = (S.sceneRow >= SCENE_MAX_ROW);
 
   // Dimmed at the ends rather than hidden: a control that vanishes moves the
@@ -290,4 +299,28 @@ void drawScenes() {
 
   sceneSnap.row   = S.sceneRow;
   sceneSnap.valid = true;
+
+  // The AC card, in the row band below the grid — the SAME card the Devices
+  // page draws, through the same function, so its chips, stepper, press flash,
+  // optimistic repaint and error border are not reimplemented here and cannot
+  // drift from the ones on Devices. btnRect() derives y from cardTop(dev) and
+  // the AC is the same row slot on both pages, so the rects are identical
+  // without drawDeviceCard() knowing which page it is on. Three decisions:
+  //
+  //   * `false`, not `first`. The card owns its own RowSnap and its own
+  //     compare, so forcing it on every scroll would repaint a card whose
+  //     state did not move — and would hide a real bug in that compare.
+  //   * NOT skipped for noConnShown(). The banner owns row band 0; this is the
+  //     last band, and the AC stays drawn with HA down for exactly the reason
+  //     rows 1..3 stay drawn on Devices.
+  //   * It SHARES snap[SCENE_AC_SLOT] with the Devices page, which is safe only
+  //     because bodyReset() zeroes snap[] on every page switch: the card's
+  //     first draw then refills its whole band. An optimisation that skipped
+  //     that wipe would leave this band empty on arrival, with the cached
+  //     fingerprint suppressing the draw that would have filled it.
+  //
+  // Drawn LAST so it lands over the gutter's column, which it overlaps in x
+  // (the card runs to x 311) — though drawSceneScrollbar()'s clear stops at
+  // SCENE_AC_Y0, so the two are disjoint and the order is belt and braces.
+  drawDeviceCard(SCENE_AC_SLOT, false);
 }

@@ -435,3 +435,51 @@ this entire pass.
   20 ms render cadence. The harness controls a simulated `millis()`
   precisely, which proves the *logic* is unchanged but cannot stand in for
   real timing jitter, a real finger, or a real PENIRQ line.
+
+---
+
+## 7. The AC card on the Scenes page
+
+Date: 2026-09-21. A feature pass, not an optimization one — recorded here only
+because it moves numbers §6's table tracks, and because it changes a golden.
+
+**What it is.** The AC card is drawn on the Scenes page as well as Devices, in
+the same row band (y 156..207) at the same rects, fully live. It is not a new
+control: `drawDeviceCard(SCENE_AC_SLOT)` and a shared `hitDeviceRow()` do all of
+it, so the two pages agree by construction rather than by review. The scene grid
+gave up its bottom row for the band (`SCENE_VIS_ROWS` 3 → 2, nine visible tiles
+→ six) and its exact-tiling `static_assert` became a `≤` bound, with a deliberate
+20px blank band between the grid and the card.
+
+**Measured.**
+
+| | before | after | Δ |
+|---|---|---|---|
+| Flash | 1,001,581 | 1,001,665 | **+84 B** |
+| RAM (static) | 50,208 | 50,208 | **0** |
+
+`SceneSnap::vis` shrank 9 → 6 bytes, which alignment absorbs, so the RAM figure
+is genuinely flat rather than coincidentally so. The +84 B is the new hit-test
+branch and the second `drawDeviceCard()` call site, partly offset by factoring
+the Devices button sweep into `hitDeviceRow()`.
+
+**The golden changed by exactly one line**, which was the point of checking it
+this way: `hitTestHash page=scenes`. `page=devices` and `page=settings` and the
+whole `dumpGeometry()` dump were byte-identical, which is what proves the
+`hitDeviceRow()` extraction was behaviour-preserving rather than merely
+plausible. Four named sample points were added to `sweepHitTest()` at the same
+time so a future move of that hash is legible: a mode chip, the setpoint's dead
+cell, the gutter/up-chevron overlap at x 301 (which pins the hit test's branch
+order), and the blank band.
+
+**Also verified without hardware:** `pio run` for the four `static_assert`s, and
+a headless `simulator.html` sweep of 83 cases — 3 pages × 3 night modes, five
+scene-table sizes × every scroll offset, and ten fault states × 3 pages — with
+zero warnings. That harness was itself checked against a deliberately broken
+`SCENE_VIS_ROWS` to confirm it is not a false negative.
+
+**Still unverified — needs the device on the desk.** Everything in §6's list
+still applies, plus one specific to this pass: that a tap at x 300..311 in the
+card's band really reaches the up chevron rather than the scroll arrow. The
+mapping is proven by the harness; the physical touch path at the panel's right
+edge is not.

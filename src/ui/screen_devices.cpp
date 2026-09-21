@@ -152,6 +152,12 @@ static void tempText(const DeviceState& d, char* out, size_t n) {
   snprintf(out, n, "%.0f", d.target);
 }
 
+// Draws device card `dev`. TWO callers on two pages now, not one: the Devices
+// page draws all four, and drawScenes() draws SCENE_AC_SLOT (the AC) into the
+// same band. Nothing in here is page-aware and nothing should become so — the
+// geometry comes from cardTop(dev)/btnRect(dev, b), which know only the slot,
+// so the same call produces the identical rect on either page. What makes the
+// shared snap[dev] safe across the two is bodyReset(); see screen_int.h.
 void drawDeviceCard(uint8_t dev, bool force) {
   DeviceState& d   = S.dev[dev];
   const uint32_t now = millis();

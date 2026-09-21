@@ -55,7 +55,7 @@
     <button onclick="dev[0].name='Reading lamp (gy)';draw()">descenders</button>
   </div>
   <div class="row">
-    <label>Scene table size &mdash; the scroll gutter only appears past 9</label>
+    <label>Scene table size &mdash; the scroll gutter only appears past 6</label>
     <button onclick="sceneStress(0)">5 scenes</button>
     <button onclick="sceneStress(19)">24 scenes</button>
     <button onclick="sceneStress(95)">100 scenes</button>
@@ -167,16 +167,25 @@ const SET_TITLE_CY=14, SET_CAP_CY=31;
 const TOGGLE_W=44, TOGGLE_H=24, TOGGLE_X=CARD_IN_X1-TOGGLE_W,
       TOGGLE_DY=(CARD_H-TOGGLE_H)>>1, TGL_PAD=3;
 
-// scenes
-const SCENE_COLS=3, SCENE_VIS_ROWS=3, SCENE_TILE_W=88, SCENE_TILE_H=64,
+// Devices 0..2 are the bulbs, device 3 is the AC. Declared BEFORE the scenes
+// block, unlike config.h's original order, because SCENE_AC_SLOT derives from
+// NUM_BULBS and a JS `const` is not hoisted for use — below it, that is a TDZ
+// ReferenceError at load rather than a C-style textual expansion.
+const NUM_DEVICES=4, NUM_BULBS=3, BULB_BTNS=6, AC_BTNS=6;
+const AC_BTN_TUP=3, AC_BTN_TEMP=4, AC_BTN_TDN=5;
+
+// scenes — TWO visible rows now, with the AC card in the row band below them
+const SCENE_COLS=3, SCENE_VIS_ROWS=2, SCENE_TILE_W=88, SCENE_TILE_H=64,
       SCENE_X0=SP_2, SCENE_GAP_X=SP_3, SCENE_GAP_Y=SP_2,
       SCENE_PITCH_X=SCENE_TILE_W+SCENE_GAP_X, SCENE_PITCH_Y=SCENE_TILE_H+SCENE_GAP_Y,
       SCENE_PER_PAGE=SCENE_COLS*SCENE_VIS_ROWS;
 const SCENE_PIP_DY=19, SCENE_PIP_R=4, SCENE_PIP_GAP=16, SCENE_NAME_DY=42;
-const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+STATUS_Y0)>>1;
-
-const NUM_DEVICES=4, NUM_BULBS=3, BULB_BTNS=6, AC_BTNS=6;
-const AC_BTN_TUP=3, AC_BTN_TEMP=4, AC_BTN_TDN=5;
+// The AC's row band on this page: the same slot, and so the same rect, it
+// occupies on Devices. _Y0 is its FIRST pixel (156) — the grid stops at or
+// before it and the scroll gutter stops with it, since the card runs to x 311
+// and so passes under the gutter's column.
+const SCENE_AC_SLOT=NUM_BULBS, SCENE_AC_Y0=ROWS_Y0+SCENE_AC_SLOT*ROW_H;
+const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+SCENE_AC_Y0)>>1;
 const BRI_STEPS=5, BRI_LABEL=['1%','25%','50%','75%','100%'];
 const BRI_LOW=1, BRI_MID=30, BRI_HIGH=100;
 const KELVIN_WARM=2202, KELVIN_COOL=4000;
@@ -815,56 +824,65 @@ function humidityText(d){
 }
 
 // ── pages ────────────────────────────────────────────────────────────────────
-function drawDevices(){
-  dev.forEach((d,i)=>{
-    if(i===0 && noConnShown()) return;   // band 0 belongs to the banner
-    const top=cardTop(i), err=isErr(), ac=(d.kind==='climate');
-    // The outline is the card's alarm channel: a failed call flashes it, and an
-    // OFFLINE device holds it. That second use is what replaced the word on the
-    // bulb cards when their state line went away.
-    const alarm=err||!d.avail;
-    rect(CARD_X,top,CARD_W,CARD_H,C.BG,alarm?C.ERROR:C.BORDER);
+// One card, so the Scenes page can draw the AC's without the Devices loop —
+// mirroring drawDeviceCard() in screen_devices.cpp, which likewise has two
+// callers on two pages now. Nothing in here is page-aware: the geometry comes
+// from cardTop(i)/btnRect(i,b), which know only the slot.
+function drawDeviceCard(i){
+  const d=dev[i];
+  const top=cardTop(i), err=isErr(), ac=(d.kind==='climate');
+  // The outline is the card's alarm channel: a failed call flashes it, and an
+  // OFFLINE device holds it. That second use is what replaced the word on the
+  // bulb cards when their state line went away.
+  const alarm=err||!d.avail;
+  rect(CARD_X,top,CARD_W,CARD_H,C.BG,alarm?C.ERROR:C.BORDER);
 
-    // Every device card is inline, sharing one identity column
-    // (BULB_ID_W/BULB_NAME_W): the icon centres on CARD_H/2 on every card, and
-    // a single name line shares that centre — the AC's room reading used to
-    // draw two more lines here; it now lives in the header instead (see
-    // drawStatusRoom() below), so the AC's identity column matches a bulb's.
-    const idCy=top+CARD_H/2;
-    drawIcon(iconVis(d,stale),CARD_ICO_CX,idCy);
+  // Every device card is inline, sharing one identity column
+  // (BULB_ID_W/BULB_NAME_W): the icon centres on CARD_H/2 on every card, and
+  // a single name line shares that centre — the AC's room reading used to
+  // draw two more lines here; it now lives in the header instead (see
+  // drawStatusRoom() below), so the AC's identity column matches a bulb's.
+  const idCy=top+CARD_H/2;
+  drawIcon(iconVis(d,stale),CARD_ICO_CX,idCy);
 
-    // The name takes the alarm colour on every card kind now — the only text
-    // left to carry that once OFFLINE (or an AC's exceptional-mode name) is gone.
-    const nameFg=alarm?C.ERROR:(stale?C.DIM:C.TEXT);
-    textTrunc('TITLE',d.name,CARD_TXT_X,idCy,BULB_NAME_W,nameFg,`row ${i} name`);
+  // The name takes the alarm colour on every card kind now — the only text
+  // left to carry that once OFFLINE (or an AC's exceptional-mode name) is gone.
+  const nameFg=alarm?C.ERROR:(stale?C.DIM:C.TEXT);
+  textTrunc('TITLE',d.name,CARD_TXT_X,idCy,BULB_NAME_W,nameFg,`row ${i} name`);
 
-    const acOff=d.kind==='climate'&&d.mode==='off';
-    for(let b=0;b<btnCount(d);b++){
-      const r=btnRect(i,b), isSw=(d.kind==='light'&&b>=4), isAc=(d.kind==='climate');
-      const isAcTemp=isAc&&(b===AC_BTN_TUP||b===AC_BTN_TDN);
-      const dis=!d.avail||(isSw&&!d.ct)||(isAcTemp&&acOff);
-      // Slot 0 is OFF on both card kinds and takes the neutral highlight, not
-      // the accent. A bulb's 1%/30%/100% chip (not the AC's mode chips, not a
-      // swatch) takes the yellow activeBri highlight instead — scoped to this
-      // one control on request. Mirrors drawDeviceCard().
-      const vis=dis?'disabled':
-        (btnActive(d,b)?(b===0?'activeOff':(!isAc&&!isSw?'activeBri':'active')):'inactive');
-      if(d.kind==='climate'){
-        if(b===AC_BTN_TUP||b===AC_BTN_TDN) wStepBtn(r,b===AC_BTN_TUP,vis);
-        else if(b===AC_BTN_TEMP){
-          const known=d.known&&d.avail&&d.target!=null;
-          // Greyed the same as the disabled chevrons beside it when the AC is
-          // off — mirrors drawDeviceCard()'s region 3.
-          wValue(r,known?fmt0(d.target):'--',known,
-                 (err||!d.avail)?C.ERROR:(acOff?C.DISABLED:(stale?C.DIM:C.TEXT)),C.BG);
-        }
-        else wChip(r,AC_LABEL[b],null,vis,`AC chip ${b}`);
+  const acOff=d.kind==='climate'&&d.mode==='off';
+  for(let b=0;b<btnCount(d);b++){
+    const r=btnRect(i,b), isSw=(d.kind==='light'&&b>=4), isAc=(d.kind==='climate');
+    const isAcTemp=isAc&&(b===AC_BTN_TUP||b===AC_BTN_TDN);
+    const dis=!d.avail||(isSw&&!d.ct)||(isAcTemp&&acOff);
+    // Slot 0 is OFF on both card kinds and takes the neutral highlight, not
+    // the accent. A bulb's 1%/30%/100% chip (not the AC's mode chips, not a
+    // swatch) takes the yellow activeBri highlight instead — scoped to this
+    // one control on request. Mirrors drawDeviceCard().
+    const vis=dis?'disabled':
+      (btnActive(d,b)?(b===0?'activeOff':(!isAc&&!isSw?'activeBri':'active')):'inactive');
+    if(d.kind==='climate'){
+      if(b===AC_BTN_TUP||b===AC_BTN_TDN) wStepBtn(r,b===AC_BTN_TUP,vis);
+      else if(b===AC_BTN_TEMP){
+        const known=d.known&&d.avail&&d.target!=null;
+        // Greyed the same as the disabled chevrons beside it when the AC is
+        // off — mirrors drawDeviceCard()'s region 3.
+        wValue(r,known?fmt0(d.target):'--',known,
+               (err||!d.avail)?C.ERROR:(acOff?C.DISABLED:(stale?C.DIM:C.TEXT)),C.BG);
       }
-      else if(isSw) wSwatch(r.x+r.w/2,r.y+r.h/2,SW_R,b===4?C.WARM:C.COOL,vis);
-      else wChip(r,BULB_LABEL[b],BULB_LABEL_ALT[b],vis,`row ${i} chip ${b}`);
-      if(r.x+r.w-1>CARD_IN_X1) warn(`row ${i} slot ${b} runs past the card inner edge (${r.x+r.w-1} > ${CARD_IN_X1})`);
+      else wChip(r,AC_LABEL[b],null,vis,`AC chip ${b}`);
     }
-  });
+    else if(isSw) wSwatch(r.x+r.w/2,r.y+r.h/2,SW_R,b===4?C.WARM:C.COOL,vis);
+    else wChip(r,BULB_LABEL[b],BULB_LABEL_ALT[b],vis,`row ${i} chip ${b}`);
+    if(r.x+r.w-1>CARD_IN_X1) warn(`row ${i} slot ${b} runs past the card inner edge (${r.x+r.w-1} > ${CARD_IN_X1})`);
+  }
+}
+
+function drawDevices(){
+  for(let i=0;i<dev.length;i++){
+    if(i===0 && noConnShown()) continue;   // band 0 belongs to the banner
+    drawDeviceCard(i);
+  }
 }
 
 function drawSceneTile(slot,idx){
@@ -893,13 +911,17 @@ function drawSceneTile(slot,idx){
   textFit('TITLE',sc.name,null,cx,y+SCENE_NAME_DY,SCENE_TILE_W-2*SP_2,fg,`scene "${sc.name}"`);
 
   if(x+SCENE_TILE_W>SCENE_SB_X0) warn(`tile ${slot} reaches into the scroll gutter`);
-  if(y+SCENE_TILE_H>STATUS_Y0)   warn(`tile ${slot} overflows into the header (${y+SCENE_TILE_H}px)`);
+  if(y+SCENE_TILE_H>SCENE_AC_Y0) warn(`tile ${slot} runs into the AC card's band (ends ${y+SCENE_TILE_H}, band starts ${SCENE_AC_Y0})`);
 }
 
 function drawSceneScrollbar(){
   const maxRow=sceneMaxRow();
   if(maxRow===0) return;                       // empty gutter, dead to taps
-  const cx=SCENE_SB_X0+SCENE_SB_W/2, bot=STATUS_Y0-1;
+  // The GRID's bottom edge, not the body's: the AC card below runs to x 311 and
+  // so passes under this column, and in the firmware each region clears only its
+  // own rect. Its down chevron's ink lands in the blank band, which is fine —
+  // the gutter owns that rect.
+  const cx=SCENE_SB_X0+SCENE_SB_W/2, bot=SCENE_AC_Y0-1;
   icoChevron(cx,ROWS_Y0+13,'up',   sceneRow===0     ?C.DISABLED:C.TEXT2,6,5);
   icoChevron(cx,bot-13,   'down', sceneRow>=maxRow ?C.DISABLED:C.TEXT2,6,5);
 
@@ -919,6 +941,11 @@ function drawScenes(){
     drawSceneTile(slot,base+slot);
   }
   drawSceneScrollbar();
+  // The AC card, in the row band below the grid — the SAME card the Devices
+  // page draws, at the same rect, so it is drawn through the same function
+  // rather than reimplemented. Not skipped for noConnShown(): the banner owns
+  // row band 0 and this is the last band.
+  drawDeviceCard(SCENE_AC_SLOT);
 }
 
 // Night mode is chip-driven now, not a toggle — no case for it here.
@@ -1162,10 +1189,19 @@ function draw(){
     if(top<STATUS_DIV_Y+1 || bot>SCR_H-1)
       warn(`header F_NUM ink (y ${top}..${bot}) leaves the band y ${STATUS_DIV_Y+1}..${SCR_H-1}`);
   }
-  if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H!==STATUS_Y0)
-    warn(`scene grid does not fill the body (${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H} of ${STATUS_Y0})`);
+  // The grid no longer FILLS the body — the AC card owns the last row band — so
+  // this is a <= bound like the x one beside it. What it still catches is the
+  // grid GROWING into the card, which would leave permanently wrong pixels.
+  if(ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H>SCENE_AC_Y0)
+    warn(`scene grid runs into the AC card's band (ends ${ROWS_Y0+(SCENE_VIS_ROWS-1)*SCENE_PITCH_Y+SCENE_TILE_H}, band starts ${SCENE_AC_Y0})`);
   if(SCENE_X0+(SCENE_COLS-1)*SCENE_PITCH_X+SCENE_TILE_W>SCENE_SB_X0)
     warn('scene grid overlaps the scroll gutter');
+  if(SCENE_AC_Y0+ROW_H!==STATUS_Y0)
+    warn(`the AC card's band on Scenes does not end at the header (${SCENE_AC_Y0+ROW_H} of ${STATUS_Y0})`);
+  if(SCENE_AC_SLOT>=NUM_DEVICES)      warn("the Scenes page's AC slot is not a device row");
+  if(SCENE_AC_SLOT!==NUM_DEVICES-1)   warn("the card copied onto Scenes is not the AC's row");
+  if(SCENE_SB_MID<=ROWS_Y0||SCENE_SB_MID>=SCENE_AC_Y0)
+    warn("scene scroll split is outside the gutter's own range");
   // Descenders on a STACKED card (the AC, and Settings) must stop before its
   // control row, or a lowercase name clips into the chips. Font 2 descends only
   // 7px below cy where FreeSans went 11, so this now clears by 5px rather than
@@ -1194,7 +1230,8 @@ function draw(){
   out+=`bulb    id ${CARD_IN_X0}..${BULB_CTL_X0-1} (name ${BULB_NAME_W}px) | chips ${BULB_CTL_X0}..${SW_X0-1} (${BULB_CHIP_W}x${BULB_CTL_H}) | swatches ${SW_X0}..${SW_X0+2*SW_CELL_W-1}\n`;
   out+=`ac      id ${CARD_IN_X0}..${BULB_CTL_X0-1} | chips ${BULB_CTL_X0}..${ACS_X0-1} | stepper ${ACS_X0}..${ACS_X0+2*ACS_BTN_W+ACS_VAL_W-1}\n`;
   out+=`scenes  ${SCENE.length} in ${sceneRowsN()} rows, showing ${sceneRow}..${sceneRow+SCENE_VIS_ROWS-1} of 0..${sceneMaxRow()}\n`;
-  out+=`        grid x ${SCENE_X0}..${sceneTileX(SCENE_COLS-1)+SCENE_TILE_W-1} | gutter ${SCENE_SB_X0}..${SCR_W-1} | y ${ROWS_Y0}..${sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H-1}\n`;
+  out+=`        grid x ${SCENE_X0}..${sceneTileX(SCENE_COLS-1)+SCENE_TILE_W-1} | gutter ${SCENE_SB_X0}..${SCR_W-1} (y ${ROWS_Y0}..${SCENE_AC_Y0-1}, split ${SCENE_SB_MID}) | y ${ROWS_Y0}..${sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H-1}\n`;
+  out+=`        blank ${sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H}..${SCENE_AC_Y0-1} (${SCENE_AC_Y0-(sceneTileY(SCENE_PER_PAGE-1)+SCENE_TILE_H)}px, deliberate) | AC card band ${SCENE_AC_Y0}..${SCENE_AC_Y0+ROW_H-1}\n`;
   out+=`night   ${ladder}\n`;
   out+=`shift   ${shiftLadder}\n`;
   out+= warnings.length
@@ -1225,6 +1262,11 @@ cv.addEventListener('click',e=>{
   }
 
   if(page===PAGE_SCENES){
+    // The AC card's band FIRST, and the order is load-bearing: the card spans
+    // x 8..311 and so reaches into the gutter's x range (300..319), and y is the
+    // only axis separating the two. Testing the gutter first would swallow every
+    // tap on the card's up chevron at x 276..303.
+    if(py>=SCENE_AC_Y0){ hitDeviceRow(SCENE_AC_SLOT,px); return; }
     if(px>=SCENE_SB_X0){
       const maxRow=sceneMaxRow();
       if(maxRow===0) return;                 // dead region while all scenes fit
@@ -1269,6 +1311,18 @@ cv.addEventListener('click',e=>{
 
   const i=Math.floor((py-ROWS_Y0)/ROW_H);
   if(i<0||i>=dev.length) return;
+  hitDeviceRow(i,px);
+});
+
+// One device row's controls, tested at a given x — mirroring screen.cpp's
+// hitDeviceRow(). The caller has already established WHICH row: from the tap's
+// y on Devices, or by construction on Scenes, where the AC card is pinned to
+// SCENE_AC_SLOT. Factored out the moment that card appeared on a second page,
+// for the same reason btnRect() is the only function that knows a row's x
+// layout — two hand-written copies of "skip the setpoint, walk btnRect()" would
+// be free to drift, and the one thing that must be true of this card on both
+// pages is that the same pixel does the same thing.
+function hitDeviceRow(i,px){
   const d=dev[i];
   for(let b=0;b<btnCount(d);b++){
     // The AC setpoint cell is a readout: a tap there is a deliberate miss.
@@ -1287,10 +1341,11 @@ cv.addEventListener('click',e=>{
         else if(b===4){d.on=true;d.kelvin=KELVIN_WARM;}
         else if(b===5){d.on=true;d.kelvin=KELVIN_COOL;}
       }
-      draw(); return;
+      draw(); return true;
     }
   }
-});
+  return false;
+}
 
 // Deep-link a state, so a particular case can be reopened (or screenshotted)
 // without clicking back to it:

@@ -577,23 +577,37 @@ re-cutting a row.
 ### 9.4 Scenes grid
 
 ```
-3 columns × 3 rows of 88 × 64 tiles
-x:  8 + 2 × 100 + 88 = 296  ≤ 300 (gutter)      gaps 12
-y: 32 + 2 ×  72 + 64 = 240  exactly              gaps 8
-gutter x 300..319, split at y 136
+3 columns × 2 rows of 88 × 64 tiles, then the AC card
+x: 8 + 2 × 100 + 88 = 296  ≤ 300 (gutter)        gaps 12
+y: 0 + 1 ×  72 + 64 = 136  ≤ 156 (AC band)       gaps 8
+blank band  y 136..155   (20px, deliberate)
+AC card     y 156..207   (row band 3, the Devices rect exactly)
+gutter x 300..319 over y 0..155, split at y 78
 ```
 
-`static_assert`ed **twice**, for two distinct failures: exact in y, because a
-leftover band below the last row would hold whatever the previous page left there;
-and stopping before the gutter in x, because the grid and the gutter each clear
-only their own rect, so an overlap is a permanently wrong pixel.
+`static_assert`ed **four** times now. The two originals: the grid must stop at or
+before the AC card's band in y, and before the gutter in x — each region clears
+only its own rect, so an overlap is a permanently wrong pixel. Two more pin the
+card's band to the body's last row and the gutter's tap split inside the gutter's
+own range.
+
+**The y assert used to be an equality, and weakening it to `≤` is the one place
+this firmware suspends the no-stranded-pixels rule.** It costs nothing here
+because the band it leaves has no *content* to go stale: across x 0..299 nothing
+writes y 136..155 after `bodyReset()`'s one-time fill, and the gutter's column is
+the one region that reaches in, which owns and clears its own rect there. What
+the assert still catches is the grid **growing** into the card.
 
 **Three columns, not the four it used to be.** A 66px square tile could hold the
 pips and a name only in the fallback font. 88px holds the name at full size, which
-is what a scene tile is *for* — nine legible tiles per page beat twelve illegible
-ones, and the page still scales past a hundred. This is also why the gaps differ
-per axis: the vertical budget is fixed at 208px, and `2 × PITCH_Y + TILE_H == 208`
-has exactly one solution keeping tiles above 60px, and it is 8.
+is what a scene tile is *for* — legible tiles beat a denser grid of illegible
+ones, and the page still scales past a hundred. The gaps differ per axis, and the
+vertical budget used to *force* the 8: `2 × PITCH_Y + TILE_H == 208` had exactly
+one solution keeping tiles above 60px. At two rows it no longer does — `PITCH_Y +
+TILE_H == 156` would want a 74px tile or a 28px gap instead. 8 survives because
+the 88 × 64 tile was kept rather than grown, which is also what leaves rows 0 and
+1 pixel-identical to where they were on a three-row page. 28 would not have been
+on the `SP_*` scale either.
 
 Tile contents are vertically centred: pips span y+15..23, the name's ascent box
 spans y+36..49, so content runs 15..49 — centre 32, exactly half of 64.
@@ -826,10 +840,25 @@ one, with no "current scene" variable to fall out of sync. An **unknown kelvin i
 simultaneously, since they differ only there, and two active tiles reads as a bug.
 
 **The page is built to scale and `SCENE[]` is the only place the count lives.** The
-snapshot is per visible **tile** (9 bytes), so 100 scenes cost the same RAM as 5.
-The scroll affordance compiles out entirely at five scenes. The arrows **page**
-rather than step: at three visible rows, stepping needs 32 taps to cross 100
-scenes where paging needs 11.
+snapshot is per visible **tile** (6 bytes), so 100 scenes cost the same RAM as 5.
+The scroll affordance compiles out entirely at five scenes, and goes live at the
+seventh. The arrows **page** rather than step: at two visible rows, stepping needs
+33 taps to cross 100 scenes (34 grid rows) where paging needs 17 — an argument
+that got *stronger* when the grid lost a row.
+
+**The AC card is on this page too, and it is not a scene.** It is the Devices
+page's card 3, drawn a second time in the bottom row band at the identical rect,
+so the one device a scene deliberately cannot act on is reachable without a tab
+switch. It goes through the same `drawDeviceCard()` and the same
+`hitDeviceRow()` as on Devices, which is what makes "the same pixel does the same
+thing on both pages" true by construction rather than by review. It takes no part
+in `sceneActive()`, `scenePlan()` or the tiles' shared error/disabled derivation:
+an AC fault greys out no scene.
+
+**The grid paid a row for it: six visible tiles instead of nine.** No visible cost
+at five scenes, which still fit. The tiles themselves were kept at 88 × 64 rather
+than grown into the freed space, so rows 0 and 1 did not move — the 20px that
+leaves sits blank between the grid and the card, separating them.
 
 ### 11.4 Settings
 
@@ -881,6 +910,7 @@ half-asleep. The visual control is frequently smaller than the thing you can hit
 | Brightness chip | 54 × 52 | 54 × 26 |
 | Stepper chevron | 28 × 52 | 28 × 26 |
 | Scene tile | 100 × 72 (full pitch) | 88 × 64 |
+| AC card on Scenes | identical to Devices | identical to Devices |
 | Settings toggle | whole row, any x | 44 × 24 track, 18 × 18 knob |
 | Tab | 81 × 32 | label + 2px underline |
 | Scroll arrow | 20 × 104 | 12 × 10 chevron |
@@ -944,7 +974,7 @@ exist to prevent.
 | One bulb chip repaint | `fillRect` 43×40 + label | ~1.7k px |
 | Bulb identity repaint | `fillRect` 44×40 + icon + 1 string | ~1.8k px |
 | AC line 1 repaint | `fillRect` 288×19 + icon + 2 strings | ~5.5k px |
-| Page switch | body wipe 320×208 + 4 cards or 9 tiles | The heaviest operation, and only on a tap |
+| Page switch | body wipe 320×208 + 4 cards, or 6 tiles + 1 card | The heaviest operation, and only on a tap |
 | Scene scroll | 9 tile repaints, **no body wipe** | Tile rects are fixed, so the gaps never change content |
 | Palette / rotation change | full `fillScreen` + invalidate | Neither alters a compared value, so both must force it |
 
@@ -1029,7 +1059,14 @@ slider, the scroll thumb, the splash pips), sliders, toggles, badges, notificati
 - **Add a per-second value to the clock region.** It is minute-rate by design.
 - **Let a page branch on `vis` itself.** Go through `ctlColour()`.
 - **Give Devices or Settings a scrollbar.** They `static_assert` that their rows
-  tile the body exactly, and that is the point.
+  tile the body exactly, and that is the point. The converse has happened once,
+  on request — Scenes gained a *fixed* row (the AC card) and its own exact-tiling
+  assert became a bound — so Scenes is the one hybrid page. That is a precedent
+  for pinning a control below a scrolling grid, not for loosening either page's
+  row grid.
+- **Copy a second device card onto another page.** The AC's is there because the
+  scene table deliberately cannot reach that device. Every other device already
+  has a card one tab away, and a second copy would be a dashboard, not a panel.
 
 ---
 

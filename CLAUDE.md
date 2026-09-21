@@ -15,8 +15,11 @@ Scope is still deliberately fixed, just no longer to a single screen. It is now
 
 1. **Devices** — 4 cards, one per entity, 23 controls.
 2. **Scenes** — macros over the three bulbs, in a scrolling 3-column grid of
-   88×64 tiles. Five are defined; the page is built for far more. No new
-   entities.
+   88×64 tiles, two rows of them, **plus the AC card copied down from Devices**
+   in the row band below the grid. Five scenes are defined; the page is built
+   for far more. No new entities: the card is device 3 drawn a second time, at
+   the identical rect, so the one device a scene deliberately cannot reach is
+   still one tap away from here.
 3. **Settings** — 4 board-level knobs (backlight, night mode [off / shift /
    red], night schedule, screen flip). Nothing here touches Home Assistant.
 
@@ -35,7 +38,10 @@ reversal of this file's former blanket ban, made on request so the scene list ca
 grow to 100+ without a redesign — not an oversight, and not a general licence.
 Devices and Settings still show every control at once, and both still
 `static_assert` that their rows tile the body exactly. A request to scroll either
-of *those* is the thing to push back on.
+of *those* is the thing to push back on. Note the converse has now happened too,
+also on request: Scenes gained a **fixed** row — the AC card in the bottom band —
+so it is the one hybrid page, a scrolling grid above a pinned control. Its own
+exact-tiling assert became a bound to make room for it.
 
 **Resist turning this into a general HA dashboard.** If a request needs a fifth
 device or a fourth page, say so explicitly rather than quietly adding one.
@@ -490,7 +496,13 @@ without step 1 every tap feels ignored. Preserve this ordering.
 
 **Scenes** (`SCENE[]` in `src/ui/screen_scenes.cpp`, `doScene()` in `main.cpp`) act on the
 three bulbs only — the AC runs on a different comfort schedule, and folding it
-in would make every scene tap a Sensibo *cloud* round trip.
+in would make every scene tap a Sensibo *cloud* round trip. **That is still
+exactly true of the scene TABLE even though the AC card is now on the page**,
+and the two must not be conflated: no scene touches the AC, and the card is not
+a scene. It is `drawDeviceCard(SCENE_AC_SLOT)` — the Devices page's card 3,
+drawn on a second page — so it takes no part in `sceneActive()`, `scenePlan()`
+or the tiles' shared `BV_ERR`/`BV_DISABLED` derivation, and an AC fault greys
+out nothing.
 
 - **The active scene is derived, never latched.** `sceneActive()` compares live
   device state against the table every render. That is what makes overriding one
@@ -534,13 +546,17 @@ adding a scene is one line and nothing else. There is deliberately **no
 - **`Hit::idx` is `int16_t` for this page.** `HIT_SCENE` carries an absolute index
   into the whole table, not the 0–11 on-screen slot, and an `int8_t` would wrap at
   128 — inside the range the grid was rebuilt to handle.
-- **The arrows page, not step.** At three visible rows, a row-at-a-time arrow
-  needs 32 taps to cross 100 scenes; a page needs 11. `sceneScrollBy()` clamps to
-  `SCENE_MAX_ROW`, so the last page is full rather than mostly empty.
+- **The arrows page, not step.** At two visible rows, a row-at-a-time arrow
+  needs 33 taps to cross 100 scenes (34 grid rows); a page needs 17. The argument
+  got *stronger* when the AC card took the bottom band and the grid went from
+  three rows to two — fewer rows per page means more of them. `sceneScrollBy()`
+  clamps to `SCENE_MAX_ROW`, so the last page is full rather than mostly empty.
 - **The whole scroll affordance compiles out at five scenes.** `SCENE_MAX_ROW` is
   a `constexpr` 0, so the gutter paints one `fillRect` and is dead to taps. Note
   the consequence: the arrow/thumb code is currently unexercised on hardware.
-  `simulator.html`'s scene-table buttons (5 / 24 / 100) exist to drive it.
+  `simulator.html`'s scene-table buttons (5 / 24 / 100) exist to drive it. Note
+  the threshold moved with `SCENE_VIS_ROWS`: scrolling now goes live at the 7th
+  scene rather than the 10th.
   Watch for `-Wdiv-by-zero` if you touch the thumb arithmetic — the early return
   does not stop GCC constant-folding a `constexpr 0` divisor, which is why
   `maxRow` substitutes 1 in the unreachable case.
@@ -551,10 +567,41 @@ adding a scene is one line and nothing else. There is deliberately **no
   hand-written caption could, and nearly did once already with `2200K` vs `2202K`.
 - **Three columns, not four.** A 66px square tile could hold the pips and a name
   only in the fallback font; 88px holds it at full size, which is what a scene tile
-  is for. Nine legible tiles per page beat twelve illegible ones, and the page
-  still scales to 100+. This is also why the gaps differ per axis (12 across, 8
-  down): the vertical budget is fixed at 208px, and `2*PITCH_Y + TILE_H == 208` has
-  exactly one solution that keeps tiles above 60px.
+  is for. Legible tiles beat a denser grid of illegible ones, and the page still
+  scales to 100+. The gaps differ per axis (12 across, 8 down); the vertical
+  budget used to *force* the 8, since `2*PITCH_Y + TILE_H == 208` had exactly one
+  solution keeping tiles above 60px, and with two rows it no longer does — 8
+  survives because the 88×64 tile was kept rather than grown, which is also what
+  left rows 0 and 1 pixel-identical to where they were before.
+- **The grid gives up its bottom row to the AC card, and with it the
+  exact-tiling rule.** Two rows reach y 135, the card's band starts at
+  `SCENE_AC_Y0` (156), and 20px of background sits between them. The y
+  `static_assert` is `<=` rather than `==` as a result — a real, deliberate
+  weakening, and the only place in this firmware where "a gap leaves pixels
+  nothing ever clears" is suspended. It costs nothing *here* because that band
+  has no content to go stale: across x 0..299 nothing writes it after
+  `bodyReset()`'s one-time fill, and the gutter's column (x 300..319) is the one
+  region that reaches in, which owns and clears its own rect there. What the
+  assert still catches is the grid **growing** into the card, which would leave
+  permanently wrong pixels — the same failure the x-side rule guards.
+- **`SCENE_SB_MID` moved 104 → 78 with the grid, and had to.** The gutter's tap
+  split halves the *gutter's* range, which is no longer the body's: the card
+  runs to x 311 and so passes under the gutter's column, so
+  `drawSceneScrollbar()` clears only down to `SCENE_AC_Y0 - 1`. Left at 104 the
+  down arrow would have had 52px against the up arrow's 104. That clear bound is
+  load-bearing, not tidiness: unbounded, it paints `C_BG` over x 300..319 of the
+  card's band and erases the card's right border column at x 311 every time the
+  gutter repaints — invisible today only because the gutter is dead at five
+  scenes.
+- **The hit test checks the card's band BEFORE the gutter.** They overlap in x
+  (card 8..311, gutter 300..319) and y is the only axis separating them, so the
+  y test has to resolve first — otherwise every tap on the card's up chevron
+  (x 276..303) reads as a scroll. `hitDeviceRow()` in `screen.cpp` is the shared
+  sweep both pages go through, factored out for the same reason `btnRect()` is
+  the only function that knows a row's x layout: two hand-written copies of
+  "skip the setpoint, walk `btnRect()`" would be free to drift, and the one
+  thing that must be true of this card on both pages is that the same pixel does
+  the same thing.
 
 **The UI layer is four translation units now, not one.** `src/ui/screen.cpp`
 used to hold all three pages plus lifecycle/hit-test/splash in a single
@@ -564,9 +611,9 @@ page boundaries:
 
 | file | owns | not shared with |
 |---|---|---|
-| `src/ui/screen.cpp` | lifecycle (`screenBegin`/`screenRender`/`screenInvalidate`/`screenSetFlip`/`screenSetNightMode`/`screenSetClock`), the header/tab strip, the connectivity overlay, `screenHitTest()`, splash, calibration | — |
+| `src/ui/screen.cpp` | lifecycle (`screenBegin`/`screenRender`/`screenInvalidate`/`screenSetFlip`/`screenSetNightMode`/`screenSetClock`), the header/tab strip, the connectivity overlay, `screenHitTest()` and its shared `hitDeviceRow()`, splash, calibration | — |
 | `src/ui/screen_devices.cpp` | the Devices page (4 cards, 23 controls): `btnActive`, `iconVis`/`bulbHue`, `drawDeviceCard` | — |
-| `src/ui/screen_scenes.cpp` | the Scenes page, including `SCENE[]` itself | `SCENE[]`'s storage — `sceneCount()`/`sceneMaxRow()` (`screen.h`) are the only way another file learns the count or the scroll range |
+| `src/ui/screen_scenes.cpp` | the Scenes page, including `SCENE[]` itself, and the one call to `drawDeviceCard()` from outside `screen.cpp` (the AC card in the bottom band) | `SCENE[]`'s storage — `sceneCount()`/`sceneMaxRow()` (`screen.h`) are the only way another file learns the count or the scroll range |
 | `src/ui/screen_settings.cpp` | the Settings page | — |
 | `src/ui/screen_int.h` | shared types (`Rect`, `CardFingerprint`/`RowSnap`, `SceneSnap`, `SettingSnap`), the three page snapshots as `extern` (defined without `static` in the .cpp that owns each, so `screen.cpp`'s `screenInvalidate()`/`bodyReset()` can still `memset()` them across the TU boundary), and small `static inline` predicates (`pressedNow`/`staleErr`/`alarmFg`/`noConnShown`/`pctMatches`/`kelvinMatches`/`rowTop`/`cardTop`) | not the public API — `screen.h` is |
 
@@ -829,8 +876,17 @@ forever. Each snapshot also needs its own `valid` flag on top, because
 **A page switch must wipe the body** (`bodyReset()`). Devices happens to
 self-clear — each row's first draw `fillRect`s its whole band — but Scenes does
 not: 88 × 64 tiles on a 100 × 72 pitch leave 12px and 8px gaps that would hold the
-previous page's pixels permanently. (A *scroll* within Scenes is different and
-needs no wipe — see the scene-grid notes above for why.) `screenInvalidate()` deliberately does **not**
+previous page's pixels permanently, and the 20px band between the last tile row
+and the AC card is painted *here and nowhere else*. (Scenes' bottom band does
+self-clear now, because the card in it is an ordinary device card doing the
+ordinary thing — that changes nothing about the rest of the page.) (A *scroll*
+within Scenes is different and needs no wipe — see the scene-grid notes above for
+why.) **That `memset(snap, ...)` is also what lets ONE `RowSnap` serve the AC
+card on two pages**: arriving on either drops the cached bytes, so the card
+always does a first draw rather than trusting a snapshot taken while the other
+page was on the glass. An optimisation that skipped the wipe would leave that
+band empty on arrival, with the cached fingerprint suppressing the draw that
+would have filled it. `screenInvalidate()` deliberately does **not**
 `fillScreen()`, because `screenSplash()` draws the logo and then calls it; the
 wipe is deferred to the next `screenRender()`.
 
@@ -1205,9 +1261,13 @@ Scenes ignores both grids and uses its own: `SCENE_COLS` × `SCENE_TILE_W/H` on 
 `SCENE_PITCH_X` / `SCENE_PITCH_Y` pitch, with `sceneTileX()`/`sceneTileY()` taking
 an on-screen **slot** rather than a scene index — which scene a slot holds depends
 on `S.sceneRow`. It is `static_assert`ed twice, for the two distinct failures: it
-must fill the body **exactly** in y (`32 + 2 × 72 + 64 = 240`), and it must stop at
-or before `SCENE_SB_X0` in x (`8 + 2 × 100 + 88 = 296 ≤ 300`), because the grid and
-the scroll gutter each clear only their own rect.
+must stop at or before the AC card's row band in y (`0 + 1 × 72 + 64 = 136 ≤ 156`
+= `SCENE_AC_Y0`), and at or before `SCENE_SB_X0` in x (`8 + 2 × 100 + 88 = 296 ≤
+300`), because the grid, the gutter and the card each clear only their own rect.
+The y one used to be an equality against `STATUS_Y0` — see the Scenes notes above
+for why it is a bound now. (Two more assert that `SCENE_AC_Y0` really is the
+body's last row band and that `SCENE_SB_MID` lands inside the gutter's own
+range.)
 
 ## Conventions
 
@@ -1252,13 +1312,18 @@ the scroll gutter each clear only their own rect.
   the setpoint and the room reading draw a 2px ring instead, positioned off
   `fontAscent()` rather than off a measured pixel.
 - **Touch targets are the full 52px row band vertically**, not the drawn control
-  strip. This is used in a dark bedroom; generous targets are intentional. Scene
+  strip, **on both pages that carry a device row** — Devices' four, and the AC
+  card at the bottom of Scenes, which goes through the same `hitDeviceRow()`.
+  This is used in a dark bedroom; generous targets are intentional. Scene
   tiles take their full 100 × 72 pitch, so the margins and gaps fold into the
-  nearest tile rather than missing; a swatch's tap cell is 30px wide while its
+  nearest tile rather than missing — which on Scenes means the blank band's top
+  8px (y 136..143) fold up into the last tile row and only y 144..155 is
+  genuinely dead, the pitch rule working rather than a bound needing tightening; a swatch's tap cell is 30px wide while its
   circle is 26px, because the cell is the target and the circle is the affordance;
   and a settings toggle row is the whole row at any x — the track is an affordance,
   not the hit area. The 32px tab strip is the one exception, and it is the
-  least-used control. The scene scroll gutter is 20 × 104 per arrow — thin, but
+  least-used control. The scene scroll gutter is 20 × 78 per arrow (it was 104,
+  before the AC card shortened the gutter to the grid's own range) — thin, but
   mostly sits in the band the 4-point fit *interpolates*, unlike the tab strip,
   which sits entirely inside whichever bezel band it extrapolates (the bottom
   one now that the header has moved there).

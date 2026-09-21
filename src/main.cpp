@@ -695,10 +695,13 @@ static void dispatchHit(Hit h) {
       break;
 
     case HIT_SCROLL:
-      // A page per tap, not a row: at three visible rows a row-at-a-time arrow
-      // would need 23 taps to cross a 100-scene list. sceneScrollBy() clamps, so
-      // the last page shows the tail rather than a screen of empty slots. No
-      // repaint call needed — drawScenes() notices the offset moved.
+      // A page per tap, not a row: at two visible rows a row-at-a-time arrow
+      // would need 33 taps to cross a 100-scene list (34 grid rows) where paging
+      // needs 17. The argument got STRONGER when the AC card took the bottom band
+      // and the grid dropped from three rows to two — fewer rows per page means
+      // more of them. sceneScrollBy() clamps, so the last page shows the tail
+      // rather than a screen of empty slots. No repaint call needed —
+      // drawScenes() notices the offset moved.
       Serial.printf("tap: scene scroll %+d\n", (int)h.idx);
       sceneScrollBy((int16_t)(h.idx * SCENE_VIS_ROWS));
       break;

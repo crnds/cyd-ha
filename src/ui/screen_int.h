@@ -119,6 +119,12 @@ struct RowSnap {
   uint8_t  icoShape;
   uint8_t  btnVis[BULB_BTNS];   // BULB_BTNS == AC_BTNS, so this covers both
 };
+// snap[SCENE_AC_SLOT] is shared by TWO pages now — the AC card is drawn on
+// Devices and on Scenes — and that is safe for one reason only: bodyReset()
+// zeroes this array on every page switch, so the card's `first` is true on
+// arrival and it refills its whole row band. A cached snapshot taken while the
+// other page was on the glass would otherwise suppress the draw and leave the
+// band empty. Nothing here is page-keyed, and nothing should become so.
 extern RowSnap snap[NUM_DEVICES];   // screen_devices.cpp
 
 // Sized per visible TILE rather than per scene, which is the whole reason
@@ -142,6 +148,14 @@ extern SettingSnap setSnap;         // screen_settings.cpp
 
 // ── per-page draw entry points ──────────────────────────
 // Called from screen.cpp's screenRender(); defined in that page's own file.
+//
+// ONE EXCEPTION, on request: drawDeviceCard() has two callers on two different
+// pages — screen.cpp's Devices branch for all four cards, and drawScenes() for
+// SCENE_AC_SLOT alone, the AC card copied onto that page at the identical rect
+// it occupies on Devices. That is the only cross-page draw call in the UI
+// layer, and it exists so the card on Scenes IS the Devices card rather than a
+// second implementation of it. It stays one entry point per page: drawScenes()
+// makes the call, screenRender()'s switch does not.
 void drawDeviceCard(uint8_t dev, bool force);   // screen_devices.cpp
 void drawScenes();                              // screen_scenes.cpp
 void drawSettings();                            // screen_settings.cpp

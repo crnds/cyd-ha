@@ -256,9 +256,20 @@ static void sweepHitTest() {
 
     // A handful of named points for a human to reason about if the hash ever
     // moves: all four corners, the screen centre, and the first tab cell.
-    const int16_t samplesX[] = { 0, SCR_W - 1, 0, SCR_W - 1, SCR_W / 2, 10 };
-    const int16_t samplesY[] = { 0, 0, SCR_H - 1, SCR_H - 1, SCR_H / 2, STATUS_Y0 + 2 };
-    for (int s = 0; s < 6; s++) {
+    //
+    // The last four are the AC card's row band, which the Scenes page now
+    // carries as well as Devices — the case a bare hash is least legible about.
+    // In order: a mode chip, the setpoint's dead cell, and then the one that
+    // pins the hit test's BRANCH ORDER — x 301 is inside both the scroll
+    // gutter (from 300) and the card's up chevron (276..303), so on Scenes it
+    // must read as the chevron, not as a scroll arrow. The last is the 20px
+    // blank band between the last tile row and the card, which must be a miss
+    // on Scenes and an ordinary row-2 tap on the other two pages.
+    const int16_t samplesX[] = { 0, SCR_W - 1, 0, SCR_W - 1, SCR_W / 2, 10,
+                                 128, 250, 301, SCR_W / 2 };
+    const int16_t samplesY[] = { 0, 0, SCR_H - 1, SCR_H - 1, SCR_H / 2, STATUS_Y0 + 2,
+                                 180, 180, 180, 145 };
+    for (int s = 0; s < 10; s++) {
       Hit h = screenHitTest(samplesX[s], samplesY[s]);
       printf("hitTest page=%s (%d,%d) -> kind=%d idx=%d sub=%d\n",
              pageNames[p], samplesX[s], samplesY[s], h.kind, h.idx, h.sub);

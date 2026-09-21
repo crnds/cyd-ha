@@ -629,29 +629,69 @@
 // the pill it replaced; anything larger closes the gap the travel needs.
 #define TGL_PAD        3
 
+#define NUM_DEVICES    4
+// Devices 0..2 are the bulbs, device 3 is the AC. Scenes act on the bulbs only.
+#define NUM_BULBS      3
+
 // ── Scenes page ──────────────────────────────────────────
-// A 3-column grid of 88x64 tiles, three rows visible, scrolled a page at a time
-// from the gutter on the right. This is the one scrolling surface in the
-// firmware — Devices and Settings are still fixed — and it exists so the scene
-// list can grow past the five defined today with no layout work. How many
-// scenes there are is NOT declared here: it is sizeof(SCENE[]) in screen.cpp,
-// so adding one is a single table line.
+// A 3-column grid of 88x64 tiles, TWO rows visible, scrolled a page at a time
+// from the gutter on the right, with the AC card sitting below it. This is the
+// one scrolling surface in the firmware — Devices and Settings are still fixed —
+// and it exists so the scene list can grow past the five defined today with no
+// layout work. How many scenes there are is NOT declared here: it is
+// sizeof(SCENE[]) in screen_scenes.cpp, so adding one is a single table line.
 //
 // 3 columns, not the 4 it used to be: a 66px square could hold three cryptic
 // dots and a name in the fallback font, and nothing else. 88px holds the name at
 // full size with room to spare, which is what a scene tile is actually for —
-// 9 legible tiles per page beat 12 illegible ones, and the page still scales.
+// legible tiles beat a denser grid of illegible ones, and the page still scales.
 //
-// The grid TILES the body exactly in y (2*72 + 64 = 208 = STATUS_Y0), the same
-// no-stranded-pixels rule the device rows follow. In x it stops short of
-// SCENE_SB_X0 so the gutter and the tiles never overlap — each region only ever
-// clears its own rect, so an overlap leaves pixels nothing repaints.
+// THE GRID NO LONGER FILLS THE BODY, and that is the one rule this page gave up
+// on purpose. The AC card is COPIED here from the Devices page — same device,
+// same row SLOT, same rects — so the bottom 52px of the body (SCENE_AC_Y0..
+// STATUS_Y0-1) belongs to that card, and the grid stops at SCENE_AC_Y0. Two
+// visible rows of 64px tiles on a 72px pitch reach y 135, which leaves a
+// deliberate 20px blank band at y 136..155 between the last tile row and the
+// card.
 //
-// The gaps differ per axis (12 across, 8 down) because the vertical budget is
-// fixed: 2*PITCH_Y + TILE_H == 208 has exactly one solution keeping tiles above
-// 60px, and it is 8. Both values are still on the spacing scale.
+// That band is NOT a stranded-pixel hazard, which is what the old exact-tiling
+// assert existed to prevent. Across x 0..299 nothing writes y 136..155 at all
+// after bodyReset()'s one-time fill — the tiles stop at 135 and drawDeviceCard()'s
+// first-draw band fill starts at rowTop(SCENE_AC_SLOT) == 156 — so there is no
+// content to go stale. The gutter's column (x 300..319) is the one exception and
+// is fine for the opposite reason: drawSceneScrollbar() OWNS that rect down to
+// SCENE_AC_Y0-1 and clears it every time it draws, and once scrolling goes live
+// the down chevron's ink lands at roughly y 137..147, inside this band by design.
+//
+// What DOES still have to hold is that no tile reaches INTO the card's band,
+// which is now a <= bound rather than an == one (screen.cpp), exactly like the
+// x-side rule against SCENE_SB_X0 — each region only ever clears its own rect,
+// so an overlap leaves pixels nothing repaints.
+//
+// The gaps still differ per axis (12 across, 8 down). The vertical budget USED to
+// force the 8 — 2*PITCH_Y + TILE_H == 208 had exactly one solution keeping tiles
+// above 60px. It no longer does: at two rows the budget is 156 and PITCH_Y +
+// TILE_H == 156 would want a 74px tile or a 28px gap instead. 8 survives because
+// the 88x64 tile was KEPT on request, spending the slack as the blank band above
+// rather than growing the tiles into it. Both values are still on the spacing
+// scale; 28 would not have been.
 #define SCENE_COLS      3
-#define SCENE_VIS_ROWS  3
+#define SCENE_VIS_ROWS  2                 // was 3, before the AC card took a band
+// The AC's row band, identical to the row it occupies on the Devices page — that
+// identity is the whole feature, so this is a SLOT into the shared row grid
+// (rowTop()/cardTop()), not a scene-specific position. Derived from NUM_BULBS
+// rather than written as 3, which is the same idiom drawStatusRoom() already
+// uses to reach the AC as S.dev[NUM_BULBS]: "the bulbs are a prefix and the AC
+// is the one device after them" is stated once, in the comment above, and not
+// re-declared here.
+#define SCENE_AC_SLOT   NUM_BULBS                        // 3 — the last row band
+// FIRST pixel of that band, 156 — and _Y0, not _Y1, deliberately. CARD_IN_X1
+// fixes _X1/_Y1 in this file as the LAST pixel of a span, so naming 156 _Y1
+// would read as 135 to anyone who trusted that convention, and every `<=` bound
+// against it would be off by one in whichever direction the reader guessed.
+// Everything that bounds against this wants "stops before the AC band", which
+// is what the _Y0 spelling says.
+#define SCENE_AC_Y0     (ROWS_Y0 + SCENE_AC_SLOT * ROW_H)  // 156
 #define SCENE_TILE_W    88
 #define SCENE_TILE_H    64
 #define SCENE_X0        SP_2                            // 8
@@ -659,7 +699,7 @@
 #define SCENE_GAP_Y     SP_2                            // 8
 #define SCENE_PITCH_X   (SCENE_TILE_W + SCENE_GAP_X)    // 100
 #define SCENE_PITCH_Y   (SCENE_TILE_H + SCENE_GAP_Y)    // 72
-#define SCENE_PER_PAGE  (SCENE_COLS * SCENE_VIS_ROWS)   // 9 tiles on screen
+#define SCENE_PER_PAGE  (SCENE_COLS * SCENE_VIS_ROWS)   // 6 tiles on screen
 
 // Tile contents, as offsets within the 88x64 tile. Chosen so the pips+name block
 // is vertically CENTRED: the pips span y+15..23 and the name's 13px ascent box
@@ -670,22 +710,26 @@
 #define SCENE_PIP_GAP   16                // 2*16 + 2*4 = 40 in 88px
 #define SCENE_NAME_DY   42                // scene name centre line
 
-// Scroll gutter: x 300..319, chevrons top and bottom. 20 x 104 per arrow —
+// Scroll gutter: x 300..319, chevrons top and bottom. 20 x 78 per arrow —
 // mostly in the band the 4-point touch fit INTERPOLATES, unlike the tab strip
 // which sits entirely inside a bezel band it extrapolates, so it is nothing
 // like as marginal. Drawn empty and dead to taps whenever every scene fits on
 // one page, which is the case today, so the current UI gains no affordance it
 // can't use.
+//
+// It is 78px per arrow rather than the 104 it was because the gutter belongs to
+// the GRID, not to the body: below SCENE_AC_Y0 the AC card runs the full card
+// width (x 8..311) and so passes UNDER this column. The gutter must therefore
+// stop where the grid does, in its clear (drawSceneScrollbar()) and in the hit
+// test alike — screenHitTest() checks the card's band BEFORE this column for
+// exactly that reason, or the card's up chevron at x 276..303 would be
+// unreachable.
 #define SCENE_SB_X0     300
 #define SCENE_SB_W      (SCR_W - SCENE_SB_X0)           // 20
-// Tap split between the two arrows: y 0..103 scrolls up, 104..207 down — the
-// body's own range, not the panel's, now that the header sits below it rather
-// than sharing the screen's bottom edge with it.
-#define SCENE_SB_MID    ((ROWS_Y0 + STATUS_Y0) / 2)
+// Tap split between the two arrows: y 0..77 scrolls up, 78..155 down — the
+// GRID's range, which is the body's less the AC card's row band at the bottom.
+#define SCENE_SB_MID    ((ROWS_Y0 + SCENE_AC_Y0) / 2)
 
-#define NUM_DEVICES    4
-// Devices 0..2 are the bulbs, device 3 is the AC. Scenes act on the bulbs only.
-#define NUM_BULBS      3
 #define BULB_BTNS      6                  // OFF, 1%, 30%, 100%, warm, cool
 #define AC_BTNS        6                  // OFF, AC, DRY, up, <setpoint>, down
 

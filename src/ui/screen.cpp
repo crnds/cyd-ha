@@ -37,7 +37,10 @@
 //
 //   * A card's first draw fills its whole BAND (full width, C_BG) and then the
 //     card, so Devices and Settings self-clear and the bands tile the body
-//     exactly. Scenes does not self-clear — see bodyReset().
+//     exactly. Scenes does not self-clear — see bodyReset(). That is still true
+//     of the grid even though Scenes now carries a card of its own in the bottom
+//     band: the card clears ITS band, and the gaps between tiles and the blank
+//     band above the card are what nothing repaints.
 //   * Every dirty rect inside a card starts at CARD_IN_X0, never at CARD_X.
 //     Filling x 8..15 would paint over the card's own left border column and
 //     erase the outline, one repaint at a time. (This used to be about the R_LG
@@ -129,17 +132,42 @@ static_assert(CARD_IN_X0 + (NIGHT_CHIPS - 1) * CHIP_PITCH + CHIP_W
                   <= CARD_IN_X1 + 1,
               "night-mode chips run past the card");
 
-// Same rule for the Scenes grid, asserted twice for two distinct failures. It
-// must fill the body EXACTLY in y, because a leftover band below the last tile
-// row would hold whatever the previous page left there; and it must stop at or
-// before the gutter in x, because the grid and the gutter each clear only their
-// own rect, so an overlap is a permanently wrong pixel.
+// Same rule for the Scenes grid, asserted twice for two distinct failures, and
+// BOTH are bounds now rather than one bound and one equality. The y one used to
+// demand the grid fill the body exactly; the AC card copied onto this page owns
+// the bottom row band, so what it demands instead is that no tile reaches into
+// that band. The 20px of background the two-row grid leaves above the card is
+// deliberate and safe — it has no content to go stale, and the one region that
+// does reach into it (the scroll gutter's column) owns and clears its own rect
+// there (see the Scenes block in config.h). The x one is unchanged: the grid and the
+// gutter each clear only their own rect, so an overlap is a permanently wrong
+// pixel.
 static_assert(ROWS_Y0 + (SCENE_VIS_ROWS - 1) * SCENE_PITCH_Y + SCENE_TILE_H
-                  == STATUS_Y0,
-              "scene grid does not fill the body exactly");
+                  <= SCENE_AC_Y0,
+              "scene grid runs into the AC card's row band");
 static_assert(SCENE_X0 + (SCENE_COLS - 1) * SCENE_PITCH_X + SCENE_TILE_W
                   <= SCENE_SB_X0,
               "scene grid overlaps the scroll gutter");
+// The card the Scenes page borrows is the AC's, at the AC's own row slot — that
+// sameness IS the feature, so pin the slot to the device list and the band to
+// the header. Between them these say "the bottom row band of the body, on both
+// pages", which is what SCENE_AC_Y0 is meant to mean.
+static_assert(SCENE_AC_Y0 + ROW_H == STATUS_Y0,
+              "the AC card's band on Scenes does not end at the header");
+static_assert(SCENE_AC_SLOT < NUM_DEVICES,
+              "the Scenes page's AC slot is not a device row");
+// The gutter's tap split has to land inside the gutter's OWN range, which is no
+// longer the body's. Halving the old ROWS_Y0..STATUS_Y0 range would leave it at
+// 104 and give the down arrow 52px against the up arrow's 104.
+static_assert(SCENE_SB_MID > ROWS_Y0 && SCENE_SB_MID < SCENE_AC_Y0,
+              "scene scroll split is outside the gutter's own range");
+// Which device sits at SCENE_AC_SLOT is RUNTIME wiring (main.cpp assigns
+// DeviceState::kind), so no assert can check it is the climate one. The closest
+// compile-time statement of the same fact is that the bulbs are a prefix with
+// exactly one device after them — which is what makes NUM_BULBS the AC's index,
+// the same basis drawStatusRoom() already reads S.dev[NUM_BULBS] on.
+static_assert(SCENE_AC_SLOT == NUM_DEVICES - 1,
+              "the card copied onto Scenes is not the AC's row");
 
 // ── labels ───────────────────────────────────────────────
 // Indexed by PageId. Sentence case, and they fit with room to spare: the widest
@@ -629,8 +657,15 @@ void screenInvalidate() {
 // self-clear (each card's first draw fills its whole row band, and the four
 // bands tile the body), but Scenes does not: 88x64 tiles on a 100 x 72 pitch
 // leave 12px and 8px gaps that would hold the previous page's pixels
-// permanently. A SCROLL within Scenes is different and needs no wipe — see the
-// square-fillRect note in drawSceneTile().
+// permanently, and the 20px band between the last tile row and the AC card is
+// painted HERE and nowhere else — no per-frame path writes it, which is exactly
+// why it is safe to leave blank. A SCROLL within Scenes is different and needs
+// no wipe — see the square-fillRect note in drawSceneTile().
+//
+// The memset of snap[] is also what lets ONE RowSnap serve the AC card on two
+// pages: arriving on either page drops the cached bytes, so the card always does
+// a first draw (band clear + outline) rather than trusting a snapshot taken
+// while the other page was on the glass.
 static void bodyReset() {
   tft.fillRect(0, 0, SCR_W, STATUS_Y0, C_BG);
   memset(snap,        0, sizeof(snap));
@@ -649,6 +684,9 @@ void screenRender() {
 
   drawStatus(false);
   switch (S.page) {
+    // drawScenes() draws the AC card in the bottom row band too — it is part of
+    // that page now, so it stays behind that page's one entry point rather than
+    // becoming a second call here. See screen_int.h.
     case PAGE_SCENES:   drawScenes();   break;
     case PAGE_SETTINGS: drawSettings(); break;
     default:
@@ -773,6 +811,29 @@ void screenCalibDot(int16_t x, int16_t y) {
   tft.fillCircle(x, y, 3, C_ACCENT);
 }
 
+// One device row's button sweep, shared by the Devices page and by the AC card
+// the Scenes page now carries. Factored out so the two call sites cannot drift
+// about the two things that make a row's targets correct: that btnRect() is the
+// only source of a control's x extent, and that the AC's setpoint cell is not a
+// control at all.
+//
+// The caller has already decided WHICH row, so only px is tested here —
+// vertically the whole 52px row band counts as the control strip (a bedroom
+// device, often used in the dark, on a resistive panel), which is why the drawn
+// 40px strip is never consulted.
+static Hit hitDeviceRow(uint8_t i, int16_t px) {
+  const bool ac = (S.dev[i].kind == DEV_CLIMATE);
+  for (uint8_t b = 0; b < btnCount(S.dev[i]); b++) {
+    // The AC setpoint cell is a readout, so a tap there is a deliberate miss
+    // rather than a third action. That dead cell between the chevrons is also
+    // what stops a slightly-off tap from stepping the wrong way.
+    if (ac && b == AC_BTN_TEMP) continue;
+    const Rect r = btnRect(i, b);
+    if (px >= r.x && px < r.x + r.w) return { HIT_ROW, (int16_t)i, (int8_t)b };
+  }
+  return { HIT_NONE, -1, -1 };
+}
+
 Hit screenHitTest(int16_t px, int16_t py) {
   const Hit miss = { HIT_NONE, -1, -1 };
 
@@ -794,8 +855,16 @@ Hit screenHitTest(int16_t px, int16_t py) {
 
   switch (S.page) {
     case PAGE_SCENES: {
-      // Gutter first — it owns everything from SCENE_SB_X0 right, and the grid
-      // static_assert guarantees no tile reaches into it.
+      // The AC card's band FIRST, and that order is load-bearing. The card is
+      // full card width (x 8..311), so it passes UNDER the gutter's column,
+      // while the gutter's own rect now stops at SCENE_AC_Y0. Testing the
+      // gutter first would swallow every tap on the card's up chevron, which
+      // sits at x 276..303.
+      if (py >= SCENE_AC_Y0) return hitDeviceRow(SCENE_AC_SLOT, px);
+
+      // Gutter next — it owns everything from SCENE_SB_X0 right, down to
+      // SCENE_AC_Y0, and the grid static_assert guarantees no tile reaches
+      // into it.
       if (px >= SCENE_SB_X0) {
         if (sceneMaxRow() == 0) return miss;   // nothing to scroll: dead region
         return { HIT_SCROLL, (int16_t)(py < SCENE_SB_MID ? -1 : +1), -1 };
@@ -842,19 +911,7 @@ Hit screenHitTest(int16_t px, int16_t py) {
     default: {
       const int i = (py - ROWS_Y0) / ROW_H;
       if (i < 0 || i >= NUM_DEVICES) return miss;
-      const bool ac = (S.dev[i].kind == DEV_CLIMATE);
-      for (uint8_t b = 0; b < btnCount(S.dev[i]); b++) {
-        // The AC setpoint cell is a readout, so a tap there is a deliberate
-        // miss rather than a third action. That dead cell between the chevrons
-        // is also what stops a slightly-off tap from stepping the wrong way.
-        if (ac && b == AC_BTN_TEMP) continue;
-        const Rect r = btnRect(i, b);
-        // Vertically the whole row band counts as the control strip: this is a
-        // bedroom device often used in the dark, so targets are 52px not 26px.
-        // `i` already came from that band, so only px needs testing.
-        if (px >= r.x && px < r.x + r.w) return { HIT_ROW, (int16_t)i, (int8_t)b };
-      }
-      return miss;
+      return hitDeviceRow((uint8_t)i, px);
     }
   }
 }
