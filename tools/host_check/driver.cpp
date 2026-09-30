@@ -231,6 +231,12 @@ static void dumpGeometry() {
     printf("nightRect c=%d -> x=%d y=%d w=%d h=%d\n", c, r.x, r.y, r.w, r.h);
   }
 
+  printf("== volRect ==\n");
+  for (uint8_t v = 0; v < VOL_STEPS; v++) {
+    const Rect r = settingChipRect(SET_ROW_VOL, v);
+    printf("volRect v=%d -> x=%d y=%d w=%d h=%d\n", v, r.x, r.y, r.w, r.h);
+  }
+
   printf("== tabRect ==\n");
   for (uint8_t t = 0; t < TAB_COUNT; t++) {
     int16_t x, w;

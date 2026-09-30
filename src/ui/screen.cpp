@@ -131,6 +131,20 @@ static_assert(CARD_IN_X0 + (BRI_STEPS - 1) * CHIP_PITCH + CHIP_W
 static_assert(CARD_IN_X0 + (NIGHT_CHIPS - 1) * CHIP_PITCH + CHIP_W
                   <= CARD_IN_X1 + 1,
               "night-mode chips run past the card");
+// Settings volume: 4 chips on the shared pitch.
+static_assert(CARD_IN_X0 + (VOL_STEPS - 1) * CHIP_PITCH + CHIP_W
+                  <= CARD_IN_X1 + 1,
+              "volume chips run past the card");
+// Settings toggle row: the two half cards and their gap must tile the full
+// card's width exactly, or the right card's border lands off the column every
+// other card on the page ends on.
+static_assert(2 * TGL_CARD_W + TGL_CARD_GAP == CARD_W,
+              "toggle cards do not tile the card width");
+static_assert(CARD_X + TGL_CARD_PITCH + TOGGLE_DX + TOGGLE_W == CARD_IN_X1,
+              "right-hand toggle does not end where a full-width one did");
+// icoSpeaker draws one wave per step above mute, and the 15px grid has room
+// for three.
+static_assert(VOL_STEPS == 4, "icoSpeaker draws VOL_STEPS - 1 waves, max 3");
 
 // Same rule for the Scenes grid, asserted twice for two distinct failures, and
 // BOTH are bounds now rather than one bound and one equality. The y one used to
@@ -586,7 +600,7 @@ static void drawNoConn(bool force) {
 }
 
 // The Scenes page (drawSceneTile/drawSceneScrollbar/drawScenes) and the
-// Settings page (setToggleVal/setIcon/drawSettingChrome/drawSettings) moved
+// Settings page (tglVal/setIcon/drawSettingChrome/drawSettings) moved
 // to screen_scenes.cpp and screen_settings.cpp respectively.
 // ── public API ───────────────────────────────────────────
 
@@ -888,24 +902,21 @@ Hit screenHitTest(int16_t px, int16_t py) {
     case PAGE_SETTINGS: {
       const int r = (py - ROWS_Y0) / ROW_H;
       if (r < 0 || r >= SET_ROWS) return miss;
-      if (r == SET_ROW_BRI) {
-        for (uint8_t b = 0; b < BRI_STEPS; b++) {
-          const Rect cr = settingChipRect(SET_ROW_BRI, b);
-          if (px >= cr.x && px < cr.x + cr.w) return { HIT_SETTING, SET_ROW_BRI, (int8_t)b };
-        }
-        return miss;
-      }
-      if (r == SET_ROW_NIGHT) {
-        for (uint8_t c = 0; c < NIGHT_CHIPS; c++) {
-          const Rect cr = settingChipRect(SET_ROW_NIGHT, c);
-          if (px >= cr.x && px < cr.x + cr.w) return { HIT_SETTING, SET_ROW_NIGHT, (int8_t)c };
-        }
-        return miss;
-      }
-      // Toggle rows: the whole row is the target, at any x. The pill is an
-      // affordance, not the hit area — a resistive-touch accommodation, and
+      // Toggle row: two cells split at the gap between the half cards, each the
+      // full height of the band and its whole half of the width. The track is
+      // an affordance, not the hit area — a resistive-touch accommodation, and
       // consistent with the generous targets everywhere else here.
-      return { HIT_SETTING, (int16_t)r, -1 };
+      if (r == SET_ROW_TGL)
+        return { HIT_SETTING, SET_ROW_TGL,
+                 (int8_t)(px < TGL_SPLIT_X ? SET_TGL_SCHED : SET_TGL_FLIP) };
+      // Chip rows. A tap between or beside chips is a miss, as on a device card.
+      const uint8_t n = r == SET_ROW_BRI ? BRI_STEPS
+                      : r == SET_ROW_NIGHT ? NIGHT_CHIPS : VOL_STEPS;
+      for (uint8_t c = 0; c < n; c++) {
+        const Rect cr = settingChipRect((uint8_t)r, c);
+        if (px >= cr.x && px < cr.x + cr.w) return { HIT_SETTING, (int16_t)r, (int8_t)c };
+      }
+      return miss;
     }
 
     default: {

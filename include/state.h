@@ -49,6 +49,7 @@ struct Settings {
   uint8_t nightMode  = NIGHT_OFF;    // NightMode: Off / Red (red-only + 1% backlight) / Shift (warm palette only)
   bool    nightSched = true;         // schedule writes nightMode Off<->Red at the boundaries
   bool    flip       = false;        // display rotated 180
+  uint8_t volIdx     = VOL_DEFAULT;  // index into VOL_AMP_LIST; 0 = mute
 };
 
 // One controlled entity. Written by the poller and by optimistic tap updates;

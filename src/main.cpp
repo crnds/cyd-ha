@@ -14,6 +14,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <XPT2046_Bitbang.h>
+#include <driver/dac.h>
 #include <math.h>
 
 #include "config.h"
@@ -25,6 +26,7 @@
 AppState S;
 
 static const uint8_t BRI_DUTY[BRI_STEPS] = BRI_DUTY_LIST;
+static const uint8_t VOL_AMP[VOL_STEPS] = VOL_AMP_LIST;
 // The LEDC timer divides the 80 MHz APB clock, so frequency and duty
 // resolution trade against each other. Exceeding this makes ledc_timer_config
 // fail at RUNTIME (a log line and a dead backlight), which is a poor way to
@@ -36,6 +38,11 @@ static_assert((uint64_t)BL_PWM_HZ << BL_PWM_BITS <= 80000000ULL,
 static_assert(BL_PWM_BITS == 8,
               "BRI_DUTY_LIST is expressed out of 255; rescale it if the "
               "resolution changes");
+
+// The tock swings +-amp about DAC_MID on an 8-bit DAC, so the loudest volume
+// must not clip either rail.
+static_assert(DAC_MID + 127 <= 255 && DAC_MID - 127 >= 0,
+              "VOL_AMP_LIST's 127 would clip the DAC about DAC_MID");
 
 // Software-SPI XPT2046 on the dedicated CYD touch pins. Used only for its
 // begin()/setCalibration() pin setup — reads go through xptRead() below.
@@ -153,7 +160,7 @@ static bool readTouch(int16_t& sx, int16_t& sy,
 
 static Preferences prefs;
 
-// Four keys, all uint8_t, clamped on load. Small enough that a RowMeta table
+// Five keys, all uint8_t, clamped on load. Small enough that a RowMeta table
 // (as ../btc-cyd-v2 uses for its thirteen) would cost more than it saves.
 // K_NIGHT's stored range widened from 0/1 (bool) to 0/1/2 (NightMode) — same
 // key, no migration needed: see NightMode's ordinal comment in state.h.
@@ -161,6 +168,7 @@ static Preferences prefs;
 #define K_NIGHT "s.nit"
 #define K_SCHED "s.nsch"
 #define K_FLIP  "s.flip"
+#define K_VOL   "s.vol"
 
 static void settingsLoad() {
   if (!prefs.begin(NVS_NAMESPACE, false)) {
@@ -175,9 +183,13 @@ static void settingsLoad() {
   S.set.nightMode  = (nm < NIGHT_MODE_COUNT) ? nm : NIGHT_OFF;   // clamp corrupt
   S.set.nightSched = prefs.getUChar(K_SCHED, 1) != 0;
   S.set.flip       = prefs.getUChar(K_FLIP,  0) != 0;
-  Serial.printf("settings: bri=%u/%u (duty %u) nightMode=%d sched=%d flip=%d\n",
+  uint8_t vol = prefs.getUChar(K_VOL, VOL_DEFAULT);
+  S.set.volIdx     = (vol < VOL_STEPS) ? vol : VOL_DEFAULT;   // clamp corrupt
+  Serial.printf("settings: bri=%u/%u (duty %u) nightMode=%d sched=%d flip=%d "
+                "vol=%u/%u (amp %u)\n",
                 S.set.briIdx, BRI_STEPS - 1, BRI_DUTY[S.set.briIdx],
-                S.set.nightMode, S.set.nightSched, S.set.flip);
+                S.set.nightMode, S.set.nightSched, S.set.flip,
+                S.set.volIdx, VOL_STEPS - 1, VOL_AMP[S.set.volIdx]);
 }
 
 // Only a user tap persists. Scheduled night transitions deliberately do not:
@@ -530,10 +542,56 @@ static void doScene(int16_t idx) {
 }
 
 // ── settings ─────────────────────────────────────────────
-// Not table-driven: the four rows are two genuinely different shapes, not
-// four uniform arms. SET_ROW_BRI/SET_ROW_NIGHT set an index-derived value
-// from `sub` with its own bounds check; SET_ROW_SCHED/SET_ROW_FLIP are plain
-// toggles with no `sub`. A single table spanning both would need a variant
+
+// Audible tap confirmation. Deliberately BLOCKING, for TOCK_MS: the obvious
+// non-blocking version (start the sound here, finish it from loop()) cannot
+// work, because doAction()/doScene() block loop() on HTTP for up to
+// HTTP_READ_SVC_MS — the sound would stall mid-note for 1.5 s on every device
+// tap. Driving the DAC from a timer ISR or an I2S DMA buffer would avoid the
+// wait, but either is a second thread of execution, which this firmware has
+// none of on purpose. 35 ms before the optimistic repaint is imperceptible.
+//
+// At the Volume setting's amplitude, and not at all when muted — returning
+// before the loop means a muted panel doesn't pay the stall either.
+//
+// Samples go out through dac_output_voltage(), not dacWrite(): the Arduino
+// wrapper re-runs dac_output_enable() — pad and RTC-GPIO init — on every call,
+// which is set-up work, not a sample write, and far too heavy to repeat 16000
+// times a second. setup()'s ramp uses dacWrite() once, so the pad is already on.
+//
+// Sample timing is a busy-wait on an absolute deadline per sample rather than a
+// delayMicroseconds() per sample, so the maths and dacWrite() cost don't
+// accumulate into a slower, flatter-pitched sound, and an interrupt landing
+// mid-sound (Wi-Fi) only delays one sample instead of shifting every one after.
+static void beep() {
+  const uint8_t amp = VOL_AMP[S.set.volIdx];
+  if (amp == 0) return;
+  const uint32_t n  = (uint32_t)TOCK_RATE_HZ * TOCK_MS / 1000;
+  const float    w1 = 2.0f * (float)M_PI * TOCK_HZ;
+  const float    w2 = w1 * TOCK_F2_X;
+  // Normalise so the two partials together peak at `amp`, never past it.
+  const float    k  = amp / (1.0f + TOCK_P2);
+  const uint32_t t0 = micros();
+  for (uint32_t i = 0; i < n; i++) {
+    const float t  = (float)i / TOCK_RATE_HZ;                 // seconds
+    const float us = t * 1e6f;
+    const float v  = expf(-us / TOCK_TAU1_US) * sinf(w1 * t)
+                   + TOCK_P2 * expf(-us / TOCK_TAU2_US) * sinf(w2 * t);
+    dac_output_voltage(SPEAKER_DAC, (uint8_t)(DAC_MID + lroundf(k * v)));
+    const uint32_t due = (uint32_t)(((uint64_t)(i + 1) * 1000000ULL) / TOCK_RATE_HZ);
+    while (micros() - t0 < due) {}
+  }
+  dac_output_voltage(SPEAKER_DAC, DAC_MID);
+  // Should read ~TOCK_MS * 1000. Much longer means the per-sample work is
+  // overrunning 1/TOCK_RATE_HZ and the tock is playing slow and flat.
+  Serial.printf("tock: amp=%u %u samples in %u us\n", (unsigned)amp,
+                (unsigned)n, (unsigned)(micros() - t0));
+}
+
+// Not table-driven: the rows are two genuinely different shapes, not uniform
+// arms. SET_ROW_BRI/SET_ROW_NIGHT/SET_ROW_VOL set an index-derived value from
+// `sub` with its own bounds check; SET_ROW_TGL's `sub` only says WHICH of two
+// plain toggles was hit. A single table spanning both would need a variant
 // per row to cover the difference — that moves the complexity rather than
 // removing it. The two toggles ARE identical in shape, so those collapse
 // into toggleSetting() below.
@@ -562,8 +620,23 @@ static void doSetting(int16_t row, int8_t sub) {
       settingsSave(K_NIGHT, S.set.nightMode);
       break;
     }
-    case SET_ROW_SCHED: toggleSetting(S.set.nightSched, K_SCHED); break;
-    case SET_ROW_FLIP:  toggleSetting(S.set.flip,       K_FLIP);  break;
+    case SET_ROW_VOL:
+      if (sub < 0 || sub >= VOL_STEPS) return;
+      if (S.set.volIdx != (uint8_t)sub) {
+        S.set.volIdx = (uint8_t)sub;
+        settingsSave(K_VOL, S.set.volIdx);
+      }
+      // The one tap that beeps AFTER acting rather than before (dispatchHit()
+      // skips it): the beep is a preview of the level just picked, so it must
+      // use the new duty. Also why a tap on the already-selected chip still
+      // beeps rather than returning early — it is how you hear the level.
+      beep();
+      break;
+    case SET_ROW_TGL:
+      if (sub == SET_TGL_SCHED)     toggleSetting(S.set.nightSched, K_SCHED);
+      else if (sub == SET_TGL_FLIP) toggleSetting(S.set.flip,       K_FLIP);
+      else return;
+      break;
     default: return;
   }
   applySettings();
@@ -665,7 +738,12 @@ static bool sampleTouch(int16_t& outX, int16_t& outY) {
 
 // The 5-case dispatch, plus the press-flash bookkeeping every case shares.
 static void dispatchHit(Hit h) {
+  // A miss stays silent: a beep there would claim something happened. That
+  // matters most on the AC setpoint readout, which is a miss precisely so an
+  // off-target tap between the chevrons does nothing.
   if (h.kind == HIT_NONE) return;
+  // A Volume chip beeps from doSetting() instead, at the level it just set.
+  if (!(h.kind == HIT_SETTING && h.idx == SET_ROW_VOL)) beep();
 
   S.pressKind = h.kind;
   S.pressIdx  = h.idx;
@@ -999,6 +1077,16 @@ void setup() {
   Serial.printf("backlight pwm: asked %u Hz, got %u Hz\n",
                 (unsigned)BL_PWM_HZ, (unsigned)blHz);
   ledcAttachPin(PIN_BACKLIGHT, BL_CHANNEL);
+
+  // Tap sound: bring the DAC up to the mid-scale the tock swings about, SLOWLY.
+  // The amp's input is AC coupled, so jumping 0 -> DAC_MID in one write is a
+  // 1.65 V step, i.e. a pop out of the speaker on every boot; ~200 ms of ramp
+  // is below what the coupling passes. The DAC then holds there for good,
+  // which also keeps GPIO 26 from floating into the amp and humming.
+  for (uint16_t v = 0; v <= DAC_MID; v++) {
+    dacWrite(PIN_SPEAKER, (uint8_t)v);
+    delayMicroseconds(1500);
+  }
   // Seeds all three memoised effects through the same path that maintains
   // them, so nothing can desync from the panel.
   applySettings();

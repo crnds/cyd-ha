@@ -79,6 +79,24 @@ void icoRotate(int16_t cx, int16_t cy, uint16_t c) {
   tft.fillTriangle(cx - 3, cy + 1, cx - 8, cy + 1, cx - 6, cy - 4, c);
 }
 
+void icoSpeaker(int16_t cx, int16_t cy, uint16_t c, uint8_t level) {
+  // Magnet box plus a flared cone, all in the left half so the right half is
+  // free for the state mark.
+  tft.fillRect(cx - 7, cy - 2, 3, 5, c);
+  tft.fillTriangle(cx - 5, cy, cx - 1, cy - 5, cx - 1, cy + 5, c);
+  if (level == 0) {
+    tft.drawLine(cx + 1, cy - 3, cx + 7, cy + 3, c);
+    tft.drawLine(cx + 1, cy + 3, cx + 7, cy - 3, c);
+    return;
+  }
+  // Right-hand half arcs (2 = top-right, 4 = bottom-right quadrant), radii
+  // 3/5/7 about a centre one column clear of the cone's mouth, so even the
+  // smallest wave reads as separate from it. r 7 reaches cx+7, the grid's edge,
+  // which is why three waves is the ceiling and why VOL_STEPS is 4.
+  for (uint8_t i = 0; i < level && i < 3; i++)
+    tft.drawCircleHelper(cx, cy, 3 + 2 * i, 2 | 4, c);
+}
+
 void icoChevron(int16_t cx, int16_t cy, ChevDir dir, uint16_t c, int16_t hw,
                 int16_t hh) {
   switch (dir) {

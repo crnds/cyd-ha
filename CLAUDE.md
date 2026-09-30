@@ -20,8 +20,9 @@ Scope is still deliberately fixed, just no longer to a single screen. It is now
    for far more. No new entities: the card is device 3 drawn a second time, at
    the identical rect, so the one device a scene deliberately cannot reach is
    still one tap away from here.
-3. **Settings** — 4 board-level knobs (backlight, night mode [off / shift /
-   red], night schedule, screen flip). Nothing here touches Home Assistant.
+3. **Settings** — 5 board-level knobs on 4 rows (backlight, night mode [off /
+   shift / red], beep volume, then night schedule and screen flip sharing the
+   last row as two half-width cards). Nothing here touches Home Assistant.
 
 **The UI runs on a design system, not per-screen styling.** Colour and type
 tokens live in `src/ui/theme.h` / `src/ui/gfx.h`; all geometry (spacing scale,
@@ -221,7 +222,7 @@ change has exactly one correct home:
 | `src/ui/gfx.h/.cpp` | the `TFT_eSPI` handle, 4 type roles, fitted/truncated text | **only `src/ui/*` may include it** |
 | `include/config.h` LAYOUT | spacing scale, radii, every rect | `simulator.html` mirrors this |
 | `src/ui/widgets.cpp` | card, chip, swatch, toggle, stepper, value, tab, pip | one `vis` byte in, pixels out |
-| `src/ui/icons.cpp` | 9 primitive-drawn glyphs on one 15×15 grid | no bitmaps, no decoration |
+| `src/ui/icons.cpp` | 10 primitive-drawn glyphs on one 15×15 grid | no bitmaps, no decoration |
 
 **Geometry is in `config.h` and not in `theme.h`, on purpose.** Splitting the
 tokens across two files looks like a wart until you remember `simulator.html`
@@ -973,7 +974,9 @@ be a toggle is now a 3-chip segmented control**, the same pattern the
 Brightness row's 5 chips already use. This was a deliberate reuse rather than
 a new row: the Settings page is fixed at exactly 4 rows that tile the body
 exactly (see below), so a 5th row was explicitly ruled out and the existing
-Night mode row absorbed the new state instead. `NightMode`
+Night mode row absorbed the new state instead. (Volume later faced the same
+wall and was handled the same way — by pairing the two toggles into one row,
+not by adding a fifth.) `NightMode`
 (`include/state.h`) is `{ NIGHT_OFF = 0, NIGHT_RED = 1, NIGHT_SHIFT = 2 }` —
 **RED deliberately kept ordinal 1**, matching the legacy bool's "true", so a
 device already persisting `s.nit = 1` in NVS reads back as full Red with zero
@@ -1097,6 +1100,53 @@ value shows up in the serial log instead of being re-diagnosed by ear.
 There is also a whine while *flashing*, and that one is not fixable here: in
 download mode the chip is in the bootloader, LEDC is not running and GPIO 21 is
 high-impedance, so no firmware constant governs the pin.
+
+**Every accepted tap plays a "tock"** through the speaker connector (GPIO 26 →
+the board's SC8002B amp), from `beep()` at the top of `dispatchHit()`. It is a
+damped **sine** at 420 Hz plus a faster-dying overtone at 2.76× (a wood-block
+partial), synthesised sample by sample into **GPIO 26's DAC** (DAC2) at 16 kHz.
+It took three tries, and the two failures are the thing to keep:
+- **A flat 2 kHz square wave was shrill** — that band is where the ear is most
+  sensitive, and a constant pitch with a hard stop is what reads as a beep.
+- **An octave falling 520 → 260 Hz sounded like a duck quack.** The downward
+  glide is most of a quack, and doing volume by LEDC duty meant a narrow pulse,
+  rich in harmonics, which is nasal. Don't reintroduce a pitch sweep or go back
+  to LEDC for this: a square wave cannot sound like a knock, and the DAC's real
+  amplitude is also what makes volume honest.
+
+Four things about the implementation:
+- It **blocks for `TOCK_MS`** (35 ms) on purpose, since a start-here/finish-in-
+  `loop()` sound would stall mid-note for the whole blocking HTTP call behind a
+  device tap, and a timer ISR or I2S DMA would be a second thread of execution.
+- Samples go out through **`dac_output_voltage()`, not `dacWrite()`** — the
+  Arduino wrapper re-runs pad/RTC-GPIO init on every call. Timing is a busy-wait
+  on an absolute per-sample deadline, and each tock logs `tock: amp=.. 560
+  samples in N us`; N should be ~35000 (measured 35007), and much more means
+  the per-sample maths is overrunning and the pitch has gone flat.
+- The DAC **idles at `DAC_MID` (128)** and is **ramped there over ~200 ms at
+  boot** rather than jumped, since the amp input is AC coupled and a 0 → 1.65 V
+  step would pop the speaker on every boot.
+- A **miss is silent**, so the AC setpoint readout's dead cell still says
+  "nothing happened".
+
+**Volume is a Settings row** (`SET_ROW_VOL`, 4 chips: 0% mute / 33% / 67% /
+100%), persisted as `s.vol`. Three things about it:
+- **Volume is the tock's peak AMPLITUDE** in DAC steps either side of
+  `DAC_MID`: `VOL_AMP_LIST` `{0, 16, 50, 127}`, picked for roughly even
+  *loudness* (~-18 / -8 / 0 dB) rather than even steps. 127 is the full swing,
+  and a `static_assert` stops it clipping.
+- **A Volume chip beeps AFTER acting, every other tap before.** `dispatchHit()`
+  skips it and `doSetting()` beeps once the new level is set, so the beep is a
+  preview of the level just picked — and tapping the already-selected chip still
+  beeps, since that is how you hear it. Mute skips the tone *and* the 30 ms stall.
+- **The speaker icon carries the level** (a cross at mute, then 1–3 waves), so
+  it is not chrome: it repaints with the level label on `setSnap.volShown`.
+
+**It cost the toggles their captions.** The page is still exactly 4 rows —
+chosen on request over re-cutting it into five shorter ones, which would have
+shrunk every target on it — so Night schedule and Flip screen now share row 3
+as two 150px cards titled "Schedule" / "Flip", and "23:45 - 08:00" /
+"Rotate 180 degrees" are gone. `Hit::sub` on `SET_ROW_TGL` says which toggle.
 
 **Backlight ordering is a trap.** The LEDC setup in `setup()` **must** come after
 `screenBegin()`: `TFT_eSPI::init()` does `pinMode(TFT_BL, OUTPUT); digitalWrite(
@@ -1320,8 +1370,9 @@ range.)
   8px (y 136..143) fold up into the last tile row and only y 144..155 is
   genuinely dead, the pitch rule working rather than a bound needing tightening; a swatch's tap cell is 30px wide while its
   circle is 26px, because the cell is the target and the circle is the affordance;
-  and a settings toggle row is the whole row at any x — the track is an affordance,
-  not the hit area. The 32px tab strip is the one exception, and it is the
+  and a settings toggle is its whole HALF of the row at any x, split at the gap
+  between the two cards (`TGL_SPLIT_X`) — the track is an affordance, not the
+  hit area. The 32px tab strip is the one exception, and it is the
   least-used control. The scene scroll gutter is 20 × 78 per arrow (it was 104,
   before the AC card shortened the gutter to the grid's own range) — thin, but
   mostly sits in the band the 4-point fit *interpolates*, unlike the tab strip,

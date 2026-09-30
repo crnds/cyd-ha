@@ -85,6 +85,11 @@
 #define PIN_LED_R      4    // RGB LED, active LOW
 #define PIN_LED_G      16
 #define PIN_LED_B      17
+// Speaker connector (P4, "SPEAK") — GPIO 26 drives the board's on-board
+// SC8002B class-AB amp. It is also the ESP32's DAC2, which is what the tap
+// sound uses: a square wave was enough for a beep, not for a tock.
+#define PIN_SPEAKER    26
+#define SPEAKER_DAC    DAC_CHANNEL_2   // GPIO 26's DAC; see TOCK_HZ below
 
 // ── Touch calibration (raw ADC -> 320x240 landscape) ─────
 // Measured on THIS unit with `pio run -e calib -t upload` (4-crosshair fit,
@@ -157,6 +162,55 @@
 // Night mode forces this step regardless of briIdx, then restores the user's
 // choice when night ends.
 #define BRI_NIGHT      0
+
+// ── Tap sound ────────────────────────────────────────────
+// A TOCK: a damped sine at one fixed pitch plus a faster-dying overtone,
+// played through GPIO 26's DAC (the ESP32's DAC2) into the SC8002B amp. Two
+// earlier versions were square waves off an LEDC channel, and both were wrong
+// for reasons worth not repeating:
+//   - a flat 2 kHz tone was SHRILL: 2 kHz sits in the ear's most sensitive band,
+//     and a constant pitch with a hard stop is exactly what reads as a "beep";
+//   - an octave falling 520 -> 260 Hz sounded like a DUCK QUACK. The downward
+//     glide is most of a quack, and a square wave at low duty (which is how
+//     that version did volume) is a narrow pulse, rich in harmonics — nasal.
+// A knock is a single pitch that dies fast, and a sine has no harmonics to
+// sound nasal with. The DAC is what makes a sine possible at all: LEDC can only
+// ever put out a square wave.
+//
+// Timbre: the fundamental rings for TOCK_TAU1_US; the overtone at TOCK_F2_X
+// times it (inharmonic, like a struck block of wood rather than a string) dies
+// in TOCK_TAU2_US and gives the attack its "knock". Deeper -> lower TOCK_HZ;
+// woodier / clickier -> raise TOCK_P2; rounder -> lengthen TOCK_TAU1_US.
+// Don't take TOCK_HZ much under ~300: the CYD's small speaker rolls off fast
+// there, and a sine has no harmonics to carry it the way a square wave did.
+#define TOCK_HZ        420
+#define TOCK_F2_X      2.76f     // overtone ratio, a wood-block partial
+#define TOCK_P2        0.6f      // overtone level, relative to the fundamental
+#define TOCK_TAU1_US   7000      // fundamental decay time constant
+#define TOCK_TAU2_US   1800      // overtone decay — much faster, it's the knock
+// ~5 tau1: the envelope is under 1% there, which is below one DAC step at the
+// loudest volume, so stopping costs no audible click. BLOCKS loop() for this
+// long — see beep() in main.cpp for why that is the right trade here.
+#define TOCK_MS        35
+// 16 kHz is ~13x the overtone's ~1.16 kHz, plenty for a sine this short, and at
+// 62.5 us per sample leaves the per-sample maths (two expf + two sinf) room.
+#define TOCK_RATE_HZ   16000
+// The DAC idles at mid-scale, and the tock swings either side of it. It is
+// ramped there slowly at boot rather than jumped, since the amp's input is AC
+// coupled and a 0 -> 1.65 V step is a pop.
+#define DAC_MID        128
+
+// Volume is a setting (Settings page, persisted in NVS), 4 steps from mute to
+// max, as the tock's PEAK AMPLITUDE in DAC steps either side of DAC_MID — a
+// true amplitude now, where the square-wave versions could only fake one with
+// duty. Picked for roughly even loudness rather than even steps: ~-18 dB,
+// ~-8 dB, 0 dB against max. 127 is the full swing. 0 is a true mute: beep()
+// skips the sound and its TOCK_MS stall entirely.
+#define VOL_STEPS      4
+#define VOL_AMP_LIST   { 0, 16, 50, 127 }
+#define VOL_LABEL_LIST { "0%", "33%", "67%", "100%" }
+// 67%, since this sits in a bedroom.
+#define VOL_DEFAULT    2
 
 // ── Night mode ───────────────────────────────────────────
 // The schedule WRITES the Night mode toggle at these boundaries rather than
@@ -602,25 +656,43 @@
 
 
 // ── Settings page ────────────────────────────────────────
-// 4 cards on the same row grid. Rows 0 and 1 are discrete segmented controls
-// (5 chips, 3 chips); rows 2..3 remain toggles.
+// 5 settings on the same 4-row grid. Rows 0..2 are discrete segmented controls
+// (5 chips, 3 chips, 4 chips); row 3 is the two toggles SIDE BY SIDE, as two
+// half-width cards. That pairing is what made room for Volume without a 5th
+// row — the rows still tile the body exactly, and the price was the toggles'
+// captions ("23:45 - 08:00", "Rotate 180 degrees") and their long titles,
+// which a 150px card has no room for. Chosen on request over re-cutting the
+// page into five shorter rows, which would have shrunk every target on it.
 #define SET_ROWS       4
 #define SET_ROW_BRI    0                  // 5 chips on the shared chip pitch
 #define SET_ROW_NIGHT  1                  // 3 chips: Off / Shift / Red
-#define SET_ROW_SCHED  2                  // toggle
-#define SET_ROW_FLIP   3                  // toggle
+#define SET_ROW_VOL    2                  // 4 chips: 0% (mute) .. 100%
+#define SET_ROW_TGL    3                  // two half-width toggle cards
 #define NIGHT_CHIPS    3     // Off / Shift / Red — see NIGHT_CHIP_MODE in state.h
-// Title + caption stacked and vertically centred in the 48px card. With Font 2's
-// 10px caps the title's ink runs y+9..21 and the caption's y+26..38, so the pair
-// is centred with a 4px gap between them and the captions' descenders land 9px
-// clear of the bottom edge (it was 4px under FreeSans). Both are the same FACE
-// now — the built-in set has no bold — so the two are told apart by colour tier
-// alone, C_TEXT against C_TEXT3.
-#define SET_TITLE_CY   14
-#define SET_CAP_CY     31
+// The toggle row's cells, in x order. This is Hit::sub on SET_ROW_TGL, the same
+// way a chip's position is Hit::sub on a chip row.
+#define SET_TGLS       2
+#define SET_TGL_SCHED  0
+#define SET_TGL_FLIP   1
+// SP_1 between the two cards, the same 4px gutter every card on the page has
+// against its vertical neighbours. (304 - 4) / 2 = 150 exactly.
+#define TGL_CARD_GAP   SP_1
+#define TGL_CARD_W     ((CARD_W - TGL_CARD_GAP) / 2)          // 150
+#define TGL_CARD_PITCH (TGL_CARD_W + TGL_CARD_GAP)            // 154 -> x 8, 162
+// Where a tap switches from one toggle to the other: the middle of the gap, so
+// neither card's own pixels ever belong to its neighbour.
+#define TGL_SPLIT_X    (CARD_X + TGL_CARD_W + TGL_CARD_GAP / 2)  // 160
+// A toggle card's title is ONE line, centred in the card on the icon's own
+// centre line. It used to sit over a C_TEXT3 caption (SET_TITLE_CY 14 /
+// SET_CAP_CY 31); the half-width card dropped the caption, so there is no pair
+// left to centre. Budget: "Schedule" runs from the text column (x+28) to SP_2
+// short of the toggle (x+97), i.e. 61px — simulator.html asserts it fits.
 #define TOGGLE_W       44
 #define TOGGLE_H       24
-#define TOGGLE_X       (CARD_IN_X1 - TOGGLE_W)       // 259
+// Offset from a half card's left edge, so both cells share it. Same "last
+// content px minus TOGGLE_W" convention the full-width card used, which is why
+// the right-hand one still lands at x 259 exactly where Flip's toggle was.
+#define TOGGLE_DX      (TGL_CARD_W - CARD_PAD - 1 - TOGGLE_W)  // 97 -> x 105, 259
 #define TOGGLE_DY      ((CARD_H - TOGGLE_H) / 2)     // 11
 // The knob is a square block inset TGL_PAD on all four sides — 18x18 in the 24px
 // track — so it reads at a glance from across a dark room while the track's

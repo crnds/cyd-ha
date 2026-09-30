@@ -22,8 +22,8 @@
 // EVERY ICON HERE IS USED, and each earns its place by carrying state rather
 // than decorating a label:
 //   icoBulb/icoSnow/icoDrop/icoPower  a device card's live status, at a glance
-//   icoSun/icoMoon/icoClock/icoRotate the four settings, which are otherwise
-//                                     four identical rows of text and a toggle
+//   icoSun/icoMoon/icoSpeaker/        the five settings, which are otherwise
+//   icoClock/icoRotate                rows of text and controls
 //   icoChevron                        the setpoint stepper and the scroll gutter
 // Nothing was added because a row "looked bare", and an icon that stops earning
 // its place is deleted rather than kept: icoWifi and icoBadge were the header's
@@ -50,6 +50,10 @@ void icoSun(int16_t cx, int16_t cy, uint16_t c);
 void icoMoon(int16_t cx, int16_t cy, uint16_t c, uint16_t bg);
 void icoClock(int16_t cx, int16_t cy, uint16_t c);
 void icoRotate(int16_t cx, int16_t cy, uint16_t c);
+// A speaker cone. It carries the volume itself, not just the row's identity:
+// `level` 0 draws a cross (mute), 1..3 draw that many sound waves — so a muted
+// panel is visible from the page without reading the chips.
+void icoSpeaker(int16_t cx, int16_t cy, uint16_t c, uint8_t level);
 
 // A solid triangle, for the stepper and the scroll gutter. Solid rather than a
 // stroked chevron because direction has to survive being read across a dark

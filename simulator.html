@@ -161,10 +161,13 @@ const ACM_W=43, ACM_PITCH=ACM_W+CHIP_GAP,
 // request, so the AC's identity column is back to a bulb's plain single line.
 
 // settings
-const SET_ROWS=4, SET_ROW_BRI=0, SET_ROW_NIGHT=1, SET_ROW_SCHED=2, SET_ROW_FLIP=3;
+const SET_ROWS=4, SET_ROW_BRI=0, SET_ROW_NIGHT=1, SET_ROW_VOL=2, SET_ROW_TGL=3;
 const NIGHT_CHIPS=3;
-const SET_TITLE_CY=14, SET_CAP_CY=31;
-const TOGGLE_W=44, TOGGLE_H=24, TOGGLE_X=CARD_IN_X1-TOGGLE_W,
+const SET_TGLS=2, SET_TGL_SCHED=0, SET_TGL_FLIP=1;
+const TGL_CARD_GAP=SP_1, TGL_CARD_W=(CARD_W-TGL_CARD_GAP)>>1,
+      TGL_CARD_PITCH=TGL_CARD_W+TGL_CARD_GAP,
+      TGL_SPLIT_X=CARD_X+TGL_CARD_W+(TGL_CARD_GAP>>1);
+const TOGGLE_W=44, TOGGLE_H=24, TOGGLE_DX=TGL_CARD_W-CARD_PAD-1-TOGGLE_W,
       TOGGLE_DY=(CARD_H-TOGGLE_H)>>1, TGL_PAD=3;
 
 // Devices 0..2 are the bulbs, device 3 is the AC. Declared BEFORE the scenes
@@ -187,6 +190,7 @@ const SCENE_PIP_DY=19, SCENE_PIP_R=4, SCENE_PIP_GAP=16, SCENE_NAME_DY=42;
 const SCENE_AC_SLOT=NUM_BULBS, SCENE_AC_Y0=ROWS_Y0+SCENE_AC_SLOT*ROW_H;
 const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+SCENE_AC_Y0)>>1;
 const BRI_STEPS=5, BRI_LABEL=['1%','25%','50%','75%','100%'];
+const VOL_STEPS=4, VOL_LABEL=['0%','33%','67%','100%'];
 const BRI_LOW=1, BRI_MID=30, BRI_HIGH=100;
 const KELVIN_WARM=2202, KELVIN_COOL=4000;
 const PCT_LOW_MAX=5, PCT_MID_MIN=25, PCT_MID_MAX=35, PCT_HIGH_MIN=95;
@@ -481,8 +485,8 @@ const tint=c=>mix(C.BG,c,56/255);
 const BULB_LABEL=['OFF','1%','30%','100%',null,null];
 const BULB_LABEL_ALT=['OFF','1','30','100',null,null];
 const AC_LABEL=['OFF','COOL','DRY',null,null,null];
-const SET_LABEL=['Brightness','Night mode','Night schedule','Flip screen'];
-const SET_CAPTION=[null,null,'23:45 - 08:00','Rotate 180 degrees'];
+const SET_LABEL=['Brightness','Night mode','Volume'];
+const TGL_LABEL=['Schedule','Flip'];
 const NIGHT_LABEL=['OFF','SHIFT','RED'];
 
 const SB_OFF={on:false}, SB_MIDW={on:true,pct:BRI_MID,kelvin:KELVIN_WARM},
@@ -516,7 +520,7 @@ const sceneMaxRow=()=>Math.max(0, sceneRowsN()-SCENE_VIS_ROWS);
 let stale=false, haOk=true, wifiOk=true, page=PAGE_DEVICES, sceneRow=0, errAt=0;
 // nightMode: 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
 const NIGHT_CHIP_MODE=[0,2,1];   // chip position -> mode: Off, Shift, Red
-let set={briIdx:2, nightMode:0, nightSched:true, flip:false};
+let set={briIdx:2, nightMode:0, nightSched:true, flip:false, volIdx:2};
 let dev=[
   {name:'1',  kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
   {name:'2',  kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
@@ -573,6 +577,9 @@ function briRect(b){
 }
 function nightRect(c){
   return {x:CARD_IN_X0+c*CHIP_PITCH, y:cardTop(SET_ROW_NIGHT)+CTL_DY, w:CHIP_W, h:CTL_H};
+}
+function volRect(v){
+  return {x:CARD_IN_X0+v*CHIP_PITCH, y:cardTop(SET_ROW_VOL)+CTL_DY, w:CHIP_W, h:CTL_H};
 }
 
 function pctMatches(want,got){
@@ -752,6 +759,13 @@ function icoRotate(cx,cy,c){
   arc(cx,cy,6,Math.PI,0,c); arc(cx,cy,6,0,Math.PI,c);
   tri([cx+3,cy-1,cx+8,cy-1,cx+6,cy+4],c);
   tri([cx-3,cy+1,cx-8,cy+1,cx-6,cy-4],c);
+}
+// Mirrors icoSpeaker() in icons.cpp: level 0 is a cross, 1..3 that many waves.
+function icoSpeaker(cx,cy,c,level){
+  g.fillStyle=c; g.fillRect(cx-7,cy-2,3,5);
+  tri([cx-5,cy,cx-1,cy-5,cx-1,cy+5],c);
+  if(level===0){ line(cx+1,cy-3,cx+7,cy+3,c); line(cx+1,cy+3,cx+7,cy-3,c); return; }
+  for(let i=0;i<level&&i<3;i++) arc(cx,cy,3+2*i,-Math.PI/2,Math.PI/2,c);
 }
 function icoChevron(cx,cy,dir,c,hw,hh){
   // dir: 'up'/'down'/'left'/'right'. hw is the base half-length (perpendicular
@@ -948,27 +962,41 @@ function drawScenes(){
   drawDeviceCard(SCENE_AC_SLOT);
 }
 
-// Night mode is chip-driven now, not a toggle — no case for it here.
-function setToggleVal(r){
-  return r===SET_ROW_SCHED?set.nightSched : r===SET_ROW_FLIP?set.flip : false;
-}
+function tglVal(t){ return t===SET_TGL_SCHED?set.nightSched:set.flip; }
 function setIcon(row,cx,cy){
   if(row===SET_ROW_BRI)        icoSun(cx,cy,C.TEXT2);
   else if(row===SET_ROW_NIGHT) icoMoon(cx,cy,C.TEXT2,C.SURFACE);
-  else if(row===SET_ROW_SCHED) icoClock(cx,cy,C.TEXT2);
-  else                         icoRotate(cx,cy,C.TEXT2);
+  else if(row===SET_ROW_VOL)   icoSpeaker(cx,cy,C.TEXT2,set.volIdx);
 }
 function drawSettings(){
   for(let r=0;r<SET_ROWS;r++){
     // SET_ROW_BRI is 0, so the brightness card shares band 0 with the banner and
-    // is skipped whole while it shows. The other three rows still draw — and they
-    // are the ones that still work, since no Settings row touches HA.
+    // is skipped whole while it shows. The other rows still draw — and they are
+    // the ones that still work, since no Settings row touches HA.
     if(r===SET_ROW_BRI && noConnShown()) continue;
     const top=cardTop(r);
+    if(r===SET_ROW_TGL){
+      // Two half-width cards — mirrors drawSettingChrome()'s SET_ROW_TGL branch.
+      for(let t=0;t<SET_TGLS;t++){
+        const x=CARD_X+t*TGL_CARD_PITCH, cy=top+CARD_H/2;
+        rect(x,top,TGL_CARD_W,CARD_H,C.SURFACE,C.BORDER);
+        if(t===SET_TGL_SCHED) icoClock(x+(CARD_ICO_CX-CARD_X),cy,C.TEXT2);
+        else                  icoRotate(x+(CARD_ICO_CX-CARD_X),cy,C.TEXT2);
+        const tx=x+(CARD_TXT_X-CARD_X);
+        gtext('TITLE',TGL_LABEL[t],tx,cy,'left',C.TEXT);
+        // The title's budget is the text column to SP_2 short of the toggle.
+        // A fit failure here is not silent-but-safe like textFit(): the title
+        // is drawn untruncated and would run under the toggle.
+        if(tx+textW('TITLE',TGL_LABEL[t])>x+TOGGLE_DX-SP_2)
+          warn(`settings toggle ${t}: title "${TGL_LABEL[t]}" reaches the toggle`);
+        wToggle(x+TOGGLE_DX,top+TOGGLE_DY,TOGGLE_W,TOGGLE_H,tglVal(t));
+      }
+      continue;
+    }
     rect(CARD_X,top,CARD_W,CARD_H,C.SURFACE,C.BORDER);
+    setIcon(r,CARD_ICO_CX,top+CARD_L1_CY);
+    gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+CARD_L1_CY,'left',C.TEXT);
     if(r===SET_ROW_BRI){
-      setIcon(r,CARD_ICO_CX,top+CARD_L1_CY);
-      gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+CARD_L1_CY,'left',C.TEXT);
       gtext('BODY',BRI_LABEL[set.briIdx],CARD_IN_X1,top+CARD_L1_CY,'right',C.TEXT2);
       for(let b=0;b<BRI_STEPS;b++){
         const q=briRect(b);
@@ -976,21 +1004,18 @@ function drawSettings(){
         if(q.x+q.w-1>CARD_IN_X1) warn(`brightness ${b} runs past the card inner edge (${q.x+q.w-1} > ${CARD_IN_X1})`);
       }
     } else if(r===SET_ROW_NIGHT){
-      setIcon(r,CARD_ICO_CX,top+CARD_L1_CY);
-      gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+CARD_L1_CY,'left',C.TEXT);
       for(let c=0;c<NIGHT_CHIPS;c++){
         const q=nightRect(c);
         wChip(q,NIGHT_LABEL[c],null,NIGHT_CHIP_MODE[c]===set.nightMode?'active':'inactive',`night ${c}`);
         if(q.x+q.w-1>CARD_IN_X1) warn(`night mode chip ${c} runs past the card inner edge (${q.x+q.w-1} > ${CARD_IN_X1})`);
       }
     } else {
-      setIcon(r,CARD_ICO_CX,top+CARD_H/2);
-      gtext('TITLE',SET_LABEL[r],CARD_TXT_X,top+SET_TITLE_CY,'left',C.TEXT);
-      gtext('BODY',SET_CAPTION[r],CARD_TXT_X,top+SET_CAP_CY,'left',C.TEXT3);
-      const capW=textW('BODY',SET_CAPTION[r]);
-      if(CARD_TXT_X+capW>TOGGLE_X-SP_2)
-        warn(`settings ${r}: caption "${SET_CAPTION[r]}" reaches the toggle`);
-      wToggle(TOGGLE_X,top+TOGGLE_DY,TOGGLE_W,TOGGLE_H,setToggleVal(r));
+      gtext('BODY',VOL_LABEL[set.volIdx],CARD_IN_X1,top+CARD_L1_CY,'right',C.TEXT2);
+      for(let v=0;v<VOL_STEPS;v++){
+        const q=volRect(v);
+        wChip(q,VOL_LABEL[v],null,v===set.volIdx?'active':'inactive',`volume ${v}`);
+        if(q.x+q.w-1>CARD_IN_X1) warn(`volume ${v} runs past the card inner edge (${q.x+q.w-1} > ${CARD_IN_X1})`);
+      }
     }
   }
 }
@@ -1304,8 +1329,16 @@ cv.addEventListener('click',e=>{
       }
       return;
     }
-    if(rw===SET_ROW_SCHED) set.nightSched=!set.nightSched;
-    if(rw===SET_ROW_FLIP)  set.flip=!set.flip;
+    if(rw===SET_ROW_VOL){
+      for(let v=0;v<VOL_STEPS;v++){
+        const q=volRect(v);
+        if(px>=q.x && px<q.x+q.w){ set.volIdx=v; draw(); return; }
+      }
+      return;
+    }
+    // SET_ROW_TGL: split at the gap between the two half cards.
+    if(px<TGL_SPLIT_X) set.nightSched=!set.nightSched;
+    else               set.flip=!set.flip;
     draw(); return;
   }
 
@@ -1349,7 +1382,7 @@ function hitDeviceRow(i,px){
 
 // Deep-link a state, so a particular case can be reopened (or screenshotted)
 // without clicking back to it:
-//   ?page=0|1|2  &night=0|1|2  &scenes=24  &stale=1  &ha=0  &wifi=0  &bri=4
+//   ?page=0|1|2  &night=0|1|2  &scenes=24  &stale=1  &ha=0  &wifi=0  &bri=4  &vol=0
 //   &name=Bedside+reading+lamp  &mode=heat  &avail=0  &ct=0  &hum=60
 const Q=new URLSearchParams(location.search);
 if(Q.has('scenes')) sceneStress(Math.max(0,+Q.get('scenes')-SCENE_BASE.length));
@@ -1357,6 +1390,7 @@ if(Q.has('page'))   page=Math.max(0,Math.min(2,+Q.get('page')));
 if(Q.has('night'))  set.nightMode=Math.max(0,Math.min(2,+Q.get('night')));
 if(Q.has('flip'))   set.flip=Q.get('flip')!=='0';
 if(Q.has('bri'))    set.briIdx=Math.max(0,Math.min(BRI_STEPS-1,+Q.get('bri')));
+if(Q.has('vol'))    set.volIdx=Math.max(0,Math.min(VOL_STEPS-1,+Q.get('vol')));
 if(Q.has('stale'))  stale=Q.get('stale')!=='0';
 if(Q.has('ha'))     haOk=Q.get('ha')!=='0';
 // Mirrors updateNetState() (main.cpp): Wi-Fi going down forces haOk false,

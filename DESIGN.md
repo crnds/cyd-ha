@@ -345,7 +345,7 @@ chevrons).
 |---|---|
 | `icoBulb` | A bulb's live state — filled in its real colour temperature, or a hollow outline when off |
 | `icoSnow` / `icoDrop` / `icoPower` | The AC's live mode: cooling, drying, off-or-unusual |
-| `icoSun` / `icoMoon` / `icoClock` / `icoRotate` | The four settings, which are otherwise four identical rows of text and a toggle |
+| `icoSun` / `icoMoon` / `icoSpeaker` / `icoClock` / `icoRotate` | The five settings, which are otherwise rows of text and controls. `icoSpeaker` also shows the volume level: a cross at mute, then 1–3 waves |
 | `icoChevron` | Direction, in the setpoint stepper and the scroll gutter |
 
 `icoMoon` takes the colour **behind** it: a crescent is a disc minus a disc, and
@@ -878,6 +878,12 @@ control shows *which* of five is selected but not what the selection *means*, an
 "50%" spelled out is the difference between a row of chips and a row of chips you
 can read.
 
+**Later: Volume.** A fifth setting (4 chips, 0% mute to 100%) took row 2, and the
+two toggles moved onto row 3 together as two half-width cards ("Schedule",
+"Flip") — keeping the page at four full-height rows rather than cutting five
+shorter ones. The price was the toggles' captions, which a 150px card has no
+room for. Volume names its level on its identity line exactly as Brightness does.
+
 Titles are `F_TITLE`/`C_TEXT`, captions `F_BODY`/`C_TEXT3`, and each caption says
 what the toggle will actually do so the control is never asking about a value the
 user has to remember.
@@ -911,7 +917,8 @@ half-asleep. The visual control is frequently smaller than the thing you can hit
 | Stepper chevron | 28 × 52 | 28 × 26 |
 | Scene tile | 100 × 72 (full pitch) | 88 × 64 |
 | AC card on Scenes | identical to Devices | identical to Devices |
-| Settings toggle | whole row, any x | 44 × 24 track, 18 × 18 knob |
+| Settings volume chip | 54 × 52 | 54 × 26 |
+| Settings toggle | its half of the row, any x (split at x 160) | 44 × 24 track, 18 × 18 knob |
 | Tab | 81 × 32 | label + 2px underline |
 | Scroll arrow | 20 × 104 | 12 × 10 chevron |
 | AC setpoint cell | **nothing** | 44 × 26 readout |

@@ -142,7 +142,9 @@ struct SettingSnap {
   uint8_t briVis[BRI_STEPS];
   int8_t  briShown;             // level named on the Brightness card's own line
   uint8_t nightVis[NIGHT_CHIPS];
-  bool    toggle[SET_ROWS];     // indices SET_ROW_BRI, SET_ROW_NIGHT unused
+  uint8_t volVis[VOL_STEPS];
+  int8_t  volShown;             // level shown by Volume's label AND its icon
+  bool    toggle[SET_TGLS];     // by cell: SET_TGL_SCHED, SET_TGL_FLIP
 };
 extern SettingSnap setSnap;         // screen_settings.cpp
 

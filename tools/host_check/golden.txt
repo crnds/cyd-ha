@@ -8316,6 +8316,11 @@ briRect b=4 -> x=248 y=22 w=54 h=26
 nightRect c=0 -> x=16 y=74 w=54 h=26
 nightRect c=1 -> x=74 y=74 w=54 h=26
 nightRect c=2 -> x=132 y=74 w=54 h=26
+== volRect ==
+volRect v=0 -> x=16 y=126 w=54 h=26
+volRect v=1 -> x=74 y=126 w=54 h=26
+volRect v=2 -> x=132 y=126 w=54 h=26
+volRect v=3 -> x=190 y=126 w=54 h=26
 == tabRect ==
 tabRect t=0 -> x=0 w=8
 tabRect t=1 -> x=16 w=8
@@ -8343,17 +8348,17 @@ hitTest page=scenes (128,180) -> kind=2 idx=3 sub=1
 hitTest page=scenes (250,180) -> kind=0 idx=-1 sub=-1
 hitTest page=scenes (301,180) -> kind=2 idx=3 sub=3
 hitTest page=scenes (160,145) -> kind=0 idx=-1 sub=-1
-hitTestHash page=settings -> e3b0298f97063503
+hitTestHash page=settings -> 1c5de9d82ed5c023
 hitTest page=settings (0,0) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (319,0) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (0,239) -> kind=1 idx=0 sub=-1
 hitTest page=settings (319,239) -> kind=0 idx=-1 sub=-1
-hitTest page=settings (160,120) -> kind=5 idx=2 sub=-1
+hitTest page=settings (160,120) -> kind=5 idx=2 sub=2
 hitTest page=settings (10,210) -> kind=0 idx=-1 sub=-1
-hitTest page=settings (128,180) -> kind=5 idx=3 sub=-1
-hitTest page=settings (250,180) -> kind=5 idx=3 sub=-1
-hitTest page=settings (301,180) -> kind=5 idx=3 sub=-1
-hitTest page=settings (160,145) -> kind=5 idx=2 sub=-1
+hitTest page=settings (128,180) -> kind=5 idx=3 sub=0
+hitTest page=settings (250,180) -> kind=5 idx=3 sub=1
+hitTest page=settings (301,180) -> kind=5 idx=3 sub=1
+hitTest page=settings (160,145) -> kind=5 idx=2 sub=2
 == drawDeviceCard dirty-region deltas ==
 bulb first-draw delta=41
 bulb repeat-unchanged delta=0
