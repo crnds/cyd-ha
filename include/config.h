@@ -244,6 +244,45 @@
 // sits in a bedroom.
 #define VOL_DEFAULT    3
 
+// Boot chime: ONE soft, sustained F#-major chord, played once at power-on
+// through the same DAC path as the tock — bootChime() in main.cpp. In the
+// spirit of the macOS startup chime, on request, after a first version (a
+// rising C6-E6-G6-C7 arpeggio with a glassy overtone) read as too busy and too
+// bright. Composed rather than sampled: the firmware has no audio-file
+// pipeline, and a synth already lives here.
+// Each note is {Hz, onset ms, decay tau ms}. The onsets are only 12 ms apart —
+// a ROLLED chord, heard as one sound with a soft edge rather than a strike,
+// not as a melody. Lower notes ring a little longer, as on a real instrument.
+// Voiced F#4 C#5 F#5 A#5 C#6: the Mac chime sits an octave or two lower, but
+// this speaker barely reproduces anything under ~400 Hz, so the chord is moved
+// up to where it can actually be heard, with only the root left below that.
+#define CHIME_NOTE_LIST { {370, 0, 650}, {554, 12, 600}, {740, 24, 550}, \
+                          {932, 36, 500}, {1109, 48, 450} }
+// The second partial is NOT an overtone here — it is a slightly detuned TWIN
+// of each note (0.4% sharp, same decay, a little quieter). The pair beats at
+// 1.5-4.4 Hz, which is the slow shimmer that makes a chord sound lush rather
+// than like five test tones. An overtone was what made the first version
+// bright and glassy, i.e. the opposite of subtle.
+#define CHIME_F2_X     1.004f
+#define CHIME_P2       0.8f
+#define CHIME_TAU2_DIV 1
+// A swell, not a strike: each note fades in over ~this tau rather than
+// starting at full level, which is most of what separates "chime" from "beep".
+#define CHIME_ATTACK_MS 25
+// Nearly linear. A soft chord stays pure; the tock's hard drive exists to make
+// a knock louder, and loudness is not the goal here.
+#define CHIME_DRIVE    0.6f
+// Quieter than a tap at the same Volume setting: the peak lands at this share
+// of the Volume step's amplitude. A boot sound announces; it shouldn't startle.
+#define CHIME_GAIN_PCT 55
+// Total length, BLOCKING. With creds in secrets.h it overlaps Wi-Fi
+// association, which setupWifi() waits on anyway, so it is free; on the
+// WiFiManager path it adds this much to boot (see setupWifi()). The long
+// CHIME_FADE_MS is part of the sound, not just click insurance: the chord is
+// meant to dissolve, and ~2.5 tau of natural decay plus this fade does that.
+#define CHIME_MS       1600
+#define CHIME_FADE_MS  400
+
 // ── Night mode ───────────────────────────────────────────
 // The schedule WRITES the Night mode toggle at these boundaries rather than
 // overriding it: between them a manual toggle always wins and sticks until the

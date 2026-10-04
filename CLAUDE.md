@@ -1166,6 +1166,28 @@ Four things about the implementation:
   sine. Don't "simplify" either away, and if it is ever still too quiet, raise
   `TOCK_HZ` before raising the drive.
 
+**A boot chime plays once per power-on** — one soft, rolled F♯-major chord in
+the spirit of the macOS startup chime (`CHIME_NOTE_LIST` in `config.h`,
+`bootChime()` in `main.cpp`), with the splash logo. Each note swells in
+(`CHIME_ATTACK_MS`) with a 0.4%-detuned twin for shimmer, nearly unclipped, at
+`CHIME_GAIN_PCT` of the Volume step. It replaced a rising C6-E6-G6-C7 arpeggio
+with a glassy overtone, rejected on hardware as too busy and too bright, so
+don't bring back a melody or a bright overtone to make it "more noticeable". It shares the tock's DAC path through
+`dacPlay()`, so it also starts from ground and fades to exactly 0. Three things
+about it are deliberate:
+- **It is gated on `esp_reset_reason()`: `ESP_RST_POWERON`/`ESP_RST_EXT` only.**
+  `serviceDailyRestart()` reboots the panel at 05:30 in a bedroom, and a crash
+  loop would chime on every lap, so software restarts, panics, watchdogs and
+  brownouts boot silently. It also follows the Volume setting, mute included.
+- **Its synth is recursive** (a rotating phasor and a multiplicative envelope per
+  partial), not `tockSample()`'s closed form: ten partials sound at once, and
+  the closed form's ~30 `expf`/`cosf` per 62.5 us sample would not fit. It runs twice from
+  `reset()`, once to measure the peak and once to play.
+- **It is free only when `secrets.h` has Wi-Fi creds**, since then it overlaps
+  association. This unit boots through WiFiManager (empty `WIFI_SSID`), and there
+  it adds `CHIME_MS` (1600 ms) to boot. Overlapping that path would mean driving
+  WiFiManager's internals.
+
 **Volume is a Settings row** (`SET_ROW_VOL`, 6 chips: 0% mute / 20% / 40% /
 60% / 80% / 100%), persisted as `s.vol6`. The key is new because the 4-step
 version's `s.vol` indices mean different levels against the 6-step table.

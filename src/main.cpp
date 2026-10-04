@@ -585,6 +585,33 @@ static float tockSample(uint32_t i) {
        + TOCK_P2 * expf(-us / TOCK_TAU2_US) * (1.0f - cosf(w1 * TOCK_F2_X * t));
 }
 
+// Plays n samples of sample(i) — already scaled to DAC steps, 0..amp — out of
+// the speaker DAC at TOCK_RATE_HZ, then hands the pin back to grounded idle.
+// Shared by the tock and the boot chime so both get the same start-from-ground,
+// raised-cosine fade-out and absolute-deadline timing. Returns elapsed us, which
+// should be ~n / TOCK_RATE_HZ seconds: much more means sample() is overrunning
+// its 62.5 us slot and the sound is playing slow and flat.
+template <typename F>
+static uint32_t dacPlay(uint32_t n, uint32_t fade, F sample) {
+  // First sample is 0, the level the GPIO was holding, so enabling the DAC
+  // under it is not a step.
+  dac_output_voltage(SPEAKER_DAC, 0);
+  dac_output_enable(SPEAKER_DAC);
+  const uint32_t t0 = micros();
+  for (uint32_t i = 0; i < n; i++) {
+    float v = sample(i);
+    // Raised-cosine fade over the last `fade` samples, so the tail lands on
+    // exactly 0 rather than stepping there from a DAC step or two.
+    if (i + fade >= n)
+      v *= 0.5f * (1.0f + cosf((float)M_PI * (i + fade - n + 1) / fade));
+    dac_output_voltage(SPEAKER_DAC, (uint8_t)lroundf(v));
+    const uint32_t due = (uint32_t)(((uint64_t)(i + 1) * 1000000ULL) / TOCK_RATE_HZ);
+    while (micros() - t0 < due) {}
+  }
+  speakerIdle();
+  return micros() - t0;
+}
+
 static void beep() {
   const uint8_t amp = VOL_AMP[S.set.volIdx];
   if (amp == 0) return;
@@ -603,26 +630,103 @@ static void beep() {
   // inside 0..amp and the tock still starts from ground.
   const float k = amp / tanhf(TOCK_DRIVE);
   const float g = TOCK_DRIVE / peak;
-  // First sample is 0, the level the GPIO was holding, so enabling the DAC
-  // under it is not a step.
-  dac_output_voltage(SPEAKER_DAC, 0);
-  dac_output_enable(SPEAKER_DAC);
-  const uint32_t t0 = micros();
-  for (uint32_t i = 0; i < n; i++) {
-    float v = k * tanhf(g * tockSample(i));
-    // Raised-cosine fade over the last TOCK_FADE_MS, so the tail lands on
-    // exactly 0 rather than stepping there from ~1.6 DAC steps.
-    if (i + fade >= n)
-      v *= 0.5f * (1.0f + cosf((float)M_PI * (i + fade - n + 1) / fade));
-    dac_output_voltage(SPEAKER_DAC, (uint8_t)lroundf(v));
-    const uint32_t due = (uint32_t)(((uint64_t)(i + 1) * 1000000ULL) / TOCK_RATE_HZ);
-    while (micros() - t0 < due) {}
-  }
-  speakerIdle();
-  // Should read ~TOCK_MS * 1000. Much longer means the per-sample work is
-  // overrunning 1/TOCK_RATE_HZ and the tock is playing slow and flat.
+  const uint32_t us =
+      dacPlay(n, fade, [&](uint32_t i) { return k * tanhf(g * tockSample(i)); });
+  // Should read ~TOCK_MS * 1000.
   Serial.printf("tock: amp=%u %u samples in %u us\n", (unsigned)amp,
-                (unsigned)n, (unsigned)(micros() - t0));
+                (unsigned)n, (unsigned)us);
+}
+
+// ── boot chime ───────────────────────────────────────────
+
+struct ChimeNote { uint16_t hz, atMs, tauMs; };
+static const ChimeNote CHIME[] = CHIME_NOTE_LIST;
+static constexpr uint8_t CHIME_N = sizeof(CHIME) / sizeof(CHIME[0]);
+
+// The chime's waveform, one sample per next(): each note's two partials as the
+// same unipolar env * (1 - cos) the tock uses, summed — with the envelope
+// multiplied by an attack (1 - exp(-t / CHIME_ATTACK_MS)) so each note swells
+// in rather than striking. That attack starts at 0 too, so a note entering
+// while others ring is still not a step. Unlike tockSample() it
+// is RECURSIVE — a rotating phasor and a multiplicative envelope per partial,
+// a handful of multiplies each — rather than an expf() + cosf() per partial per
+// sample. With ten partials sounding at once (5 notes x 2), the closed form
+// would be 30 transcendentals with the attack in a 62.5 us slot that also has
+// to fit a tanhf().
+// Deterministic, so running it twice from reset() gives the same samples:
+// once to measure the peak, once to play.
+class ChimeSynth {
+  struct Partial { uint32_t at; float c, s, cw, sw, e, d, a; };
+  float ra_ = 0.0f;   // per-sample decay of the attack's remaining gap
+  Partial p_[CHIME_N * 2];
+  uint32_t i_ = 0;
+
+ public:
+  void reset() {
+    i_ = 0;
+    ra_ = expf(-1000.0f / ((float)CHIME_ATTACK_MS * TOCK_RATE_HZ));
+    for (uint8_t n = 0; n < CHIME_N; n++) {
+      for (uint8_t k = 0; k < 2; k++) {
+        Partial& q = p_[n * 2 + k];
+        const float hz  = CHIME[n].hz * (k ? CHIME_F2_X : 1.0f);
+        const float tau = (float)CHIME[n].tauMs / (k ? CHIME_TAU2_DIV : 1); // ms
+        const float w   = 2.0f * (float)M_PI * hz / TOCK_RATE_HZ;
+        q.at = (uint32_t)CHIME[n].atMs * TOCK_RATE_HZ / 1000;
+        q.c = 1.0f; q.s = 0.0f;              // phase 0: (1 - c) starts at 0
+        q.cw = cosf(w); q.sw = sinf(w);
+        q.e = k ? CHIME_P2 : 1.0f;
+        q.d = expf(-1000.0f / (tau * TOCK_RATE_HZ));
+        q.a = 1.0f;                          // attack gap: (1 - a) starts at 0
+      }
+    }
+  }
+  float next() {
+    float v = 0.0f;
+    for (Partial& q : p_) {
+      if (i_ < q.at) continue;
+      v += q.e * (1.0f - q.a) * (1.0f - q.c);
+      const float c = q.c * q.cw - q.s * q.sw;
+      q.s = q.s * q.cw + q.c * q.sw;
+      q.c = c;
+      q.e *= q.d;
+      q.a *= ra_;
+    }
+    i_++;
+    return v;
+  }
+};
+
+// Once per POWER-ON, at the Volume setting, silent when muted. Deliberately
+// not on every boot: serviceDailyRestart() reboots the panel at 05:30 in a
+// bedroom, and a crash loop would chime on every lap — so a software restart,
+// a panic, a watchdog or a brownout boots quietly. ESP_RST_POWERON is the
+// plug going in (and the EN-pin reset esptool does after a flash); ESP_RST_EXT
+// is the reset button.
+static void bootChime() {
+  const esp_reset_reason_t why = esp_reset_reason();
+  if (why != ESP_RST_POWERON && why != ESP_RST_EXT) {
+    Serial.printf("chime: skipped, reset reason %d\n", (int)why);
+    return;
+  }
+  const uint8_t vol = VOL_AMP[S.set.volIdx];
+  if (vol == 0) return;
+  const float amp = vol * (CHIME_GAIN_PCT / 100.0f);
+  const uint32_t n = (uint32_t)TOCK_RATE_HZ * CHIME_MS / 1000;
+  const uint32_t fade = (uint32_t)TOCK_RATE_HZ * CHIME_FADE_MS / 1000;
+  // Measured peak, same reason as beep(): the notes overlap, and summing every
+  // partial's worst case would leave the chime far quieter than amp.
+  ChimeSynth syn;
+  syn.reset();
+  float peak = 0.0f;
+  for (uint32_t i = 0; i < n; i++) peak = fmaxf(peak, syn.next());
+  const float k = amp / tanhf(CHIME_DRIVE);
+  const float g = CHIME_DRIVE / peak;
+  syn.reset();
+  const uint32_t us =
+      dacPlay(n, fade, [&](uint32_t) { return k * tanhf(g * syn.next()); });
+  // Should read ~CHIME_MS * 1000.
+  Serial.printf("chime: amp=%u %u samples in %u us\n", (unsigned)lroundf(amp),
+                (unsigned)n, (unsigned)us);
 }
 
 // Not table-driven: the rows are two genuinely different shapes, not uniform
@@ -864,10 +968,22 @@ static void updateNetState() {
 static void setupWifi() {
   screenSplash();          // logo only
 
-  if (strlen(WIFI_SSID) > 0) {
+  const bool creds = strlen(WIFI_SSID) > 0;
+  uint32_t t0 = 0;
+  if (creds) {
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
-    uint32_t t0 = millis();
+    t0 = millis();
+  }
+  // With the logo, before either Wi-Fi path. With creds in secrets.h,
+  // association runs on the Wi-Fi task while this blocks and the loop below
+  // would only be waiting for it, so the chime is free (t0 is taken first, so it
+  // does not eat into WIFI_CONNECT_MS). The WiFiManager path can't overlap it —
+  // autoConnect() does its own begin() and blocking it would mean driving
+  // WiFiManager's internals — so there it adds CHIME_MS to boot.
+  bootChime();
+
+  if (creds) {
     // Tick the splash's progress pips while we block here. Three fillCircles at
     // 5 Hz, and it is the difference between "connecting" and "hung".
     for (uint8_t ph = 0;
