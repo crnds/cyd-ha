@@ -3,7 +3,7 @@
 // Everything runs on the single Arduino loop() task — no RTOS tasks, no
 // locking. loop() calls, in order: updateNetState -> servicePoll ->
 // serviceNightSchedule -> serviceDailyRestart -> applySettings ->
-// handleTouch -> screenRender, then delay(20).
+// handleTouch -> serviceIdleHome -> screenRender, then delay(20).
 //
 // The touch stack (xptWrite/xptRead/readTouch) is carried from the sibling
 // ../btcticker-cyd firmware, which was calibrated against this same physical
@@ -935,10 +935,28 @@ static void dispatchHit(Hit h) {
   }
 }
 
+// millis() of the last touch, misses included. Starts at boot, so a panel
+// nobody touches after power-on also ends up on Scenes.
+static uint32_t lastTouchMs = 0;
+
 static void handleTouch() {
   int16_t x, y;
   if (!sampleTouch(x, y)) return;
+  lastTouchMs = millis();
   dispatchHit(screenHitTest(x, y));
+}
+
+// Back to Scenes after IDLE_HOME_MS without a touch (see config.h). Runs AFTER
+// handleTouch(): a tap on the pass the timeout would fire has just reset
+// lastTouchMs, so it is never hit-tested against a page that isn't on the
+// glass yet. Before screenRender(), so the switch paints this same pass, the
+// same way a tab tap does. Unsigned subtraction keeps it right across the
+// 49-day millis() wrap.
+static void serviceIdleHome() {
+  if (S.page == PAGE_SCENES || millis() - lastTouchMs < IDLE_HOME_MS) return;
+  Serial.printf("idle: %lus without a touch -> Scenes\n",
+                (unsigned long)(IDLE_HOME_MS / 1000));
+  S.page = PAGE_SCENES;
 }
 
 // ── networking ───────────────────────────────────────────
@@ -1268,6 +1286,7 @@ void loop() {
   serviceDailyRestart(hhmm);
   applySettings();
   handleTouch();
+  serviceIdleHome();
   screenRender();
   logClockOnce(timeValid, localTm);
   logHeap();

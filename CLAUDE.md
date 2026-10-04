@@ -403,9 +403,18 @@ state**; nothing was added because a row looked bare.
 
 Everything runs on the single Arduino `loop()` task — **no RTOS tasks, no
 locking**. `loop()` calls, in order: `updateNetState` → `servicePoll` →
-`serviceNightSchedule` → `applySettings` → `handleTouch` → `screenRender`, then
-`delay(20)`. `applySettings()` sits before `handleTouch()` so a scheduled flip
-lands before the tap that follows it is mapped.
+`serviceNightSchedule` → `applySettings` → `handleTouch` → `serviceIdleHome` →
+`screenRender`, then `delay(20)`. `applySettings()` sits before `handleTouch()`
+so a scheduled flip lands before the tap that follows it is mapped.
+
+**After `IDLE_HOME_MS` (5 min) without a touch, Devices or Settings falls back
+to Scenes**, on request, so walking up to the panel always lands on the scene
+grid. `serviceIdleHome()` sits *after* `handleTouch()` for the same reason
+`applySettings()` sits before it: a tap on the pass the timeout fires has just
+reset `lastTouchMs`, so it is never hit-tested against a page that isn't on the
+glass yet. Any contact counts as activity, misses included. The timer starts at
+boot, so a panel nobody touches ends up on Scenes too. Scenes' scroll offset is
+left alone.
 
 **Shared state is one global `AppState S`** (`include/state.h`), holding
 `DeviceState dev[4]`, the current `page`, and the persisted `Settings set`. The

@@ -300,6 +300,15 @@
 // same minute.
 #define RESTART_MIN    (5 * 60 + 30)      // 05:30
 
+// ── Idle return to Scenes ────────────────────────────────
+// After this long without a touch, a panel left on Devices or Settings goes
+// back to Scenes, so walking up to it always lands on the one-tap scene grid
+// rather than wherever the last visit happened to end. Any contact counts as
+// activity, even a tap on no control: the point is "nobody is using it".
+// Scenes itself is left alone, scroll offset included (S.sceneRow survives a
+// page switch on purpose).
+#define IDLE_HOME_MS   (5UL * 60 * 1000)  // 5 min
+
 // ── Persistence ──────────────────────────────────────────
 // NVS namespace for the Settings page. Shares the 20 KB nvs partition with
 // WiFiManager's own credential store (a separate namespace).
