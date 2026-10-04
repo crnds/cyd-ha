@@ -195,7 +195,8 @@ const SCENE_PIP_DY=19, SCENE_PIP_R=4, SCENE_PIP_GAP=16, SCENE_NAME_DY=42;
 const SCENE_AC_SLOT=NUM_BULBS, SCENE_AC_Y0=ROWS_Y0+SCENE_AC_SLOT*ROW_H;
 const SCENE_SB_X0=300, SCENE_SB_W=SCR_W-SCENE_SB_X0, SCENE_SB_MID=(ROWS_Y0+SCENE_AC_Y0)>>1;
 const BRI_STEPS=5, BRI_LABEL=['1%','25%','50%','75%','100%'];
-const VOL_STEPS=4, VOL_LABEL=['0%','33%','67%','100%'];
+const VOL_STEPS=6, VOL_LABEL=['0%','20%','40%','60%','80%','100%'];
+const VOL_CHIP_W=44, VOL_CHIP_PITCH=VOL_CHIP_W+CHIP_GAP;
 const BRI_LOW=1, BRI_MID=30, BRI_HIGH=100;
 const KELVIN_WARM=2202, KELVIN_COOL=4000;
 const PCT_LOW_MAX=5, PCT_MID_MIN=25, PCT_MID_MAX=35, PCT_HIGH_MIN=95;
@@ -525,7 +526,7 @@ const sceneMaxRow=()=>Math.max(0, sceneRowsN()-SCENE_VIS_ROWS);
 let stale=false, haOk=true, wifiOk=true, page=PAGE_DEVICES, sceneRow=0, errAt=0;
 // nightMode: 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
 const NIGHT_CHIP_MODE=[0,2,1];   // chip position -> mode: Off, Shift, Red
-let set={briIdx:2, nightMode:0, nightSched:true, flip:false, volIdx:2};
+let set={briIdx:2, nightMode:0, nightSched:true, flip:false, volIdx:3};
 let dev=[
   {name:'1',  kind:'light',   on:true,  pct:30,  kelvin:2700, ct:true, known:true, avail:true},
   {name:'2',  kind:'light',   on:false, pct:100, kelvin:2202, ct:true, known:true, avail:true},
@@ -584,8 +585,10 @@ function nightRect(c){
   return {x:CARD_IN_X0+c*CHIP_PITCH, y:cardTop(SET_ROW_NIGHT)+CTL_DY, w:CHIP_W, h:CTL_H};
 }
 function volRect(v){
-  return {x:CARD_IN_X0+v*CHIP_PITCH, y:cardTop(SET_ROW_VOL)+CTL_DY, w:CHIP_W, h:CTL_H};
+  return {x:CARD_IN_X0+v*VOL_CHIP_PITCH, y:cardTop(SET_ROW_VOL)+CTL_DY, w:VOL_CHIP_W, h:CTL_H};
 }
+// Mirrors volWaves() in screen_settings.cpp.
+function volWaves(i){ return (i+1)>>1; }
 
 function pctMatches(want,got){
   if(want>=BRI_HIGH) return got>=PCT_HIGH_MIN;
@@ -765,7 +768,7 @@ function icoRotate(cx,cy,c){
   tri([cx+3,cy-1,cx+8,cy-1,cx+6,cy+4],c);
   tri([cx-3,cy+1,cx-8,cy+1,cx-6,cy-4],c);
 }
-// Mirrors icoSpeaker() in icons.cpp: level 0 is a cross, 1..3 that many waves.
+// Mirrors icoSpeaker() in icons.cpp: waves 0 is a cross, 1..3 that many waves.
 function icoSpeaker(cx,cy,c,level){
   g.fillStyle=c; g.fillRect(cx-7,cy-2,3,5);
   tri([cx-5,cy,cx-1,cy-5,cx-1,cy+5],c);
@@ -971,7 +974,7 @@ function tglVal(t){ return t===SET_TGL_SCHED?set.nightSched:set.flip; }
 function setIcon(row,cx,cy){
   if(row===SET_ROW_BRI)        icoSun(cx,cy,C.TEXT2);
   else if(row===SET_ROW_NIGHT) icoMoon(cx,cy,C.TEXT2,C.SURFACE);
-  else if(row===SET_ROW_VOL)   icoSpeaker(cx,cy,C.TEXT2,set.volIdx);
+  else if(row===SET_ROW_VOL)   icoSpeaker(cx,cy,C.TEXT2,volWaves(set.volIdx));
 }
 function drawSettings(){
   for(let r=0;r<SET_ROWS;r++){

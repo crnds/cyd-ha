@@ -128,8 +128,8 @@ static_assert(CARD_IN_X0 + (BRI_STEPS - 1) * CHIP_PITCH + CHIP_W
 static_assert(CARD_IN_X0 + (NIGHT_CHIPS - 1) * CHIP_PITCH + CHIP_W
                   <= CARD_IN_X1 + 1,
               "night-mode chips run past the card");
-// Settings volume: 4 chips on the shared pitch.
-static_assert(CARD_IN_X0 + (VOL_STEPS - 1) * CHIP_PITCH + CHIP_W
+// Settings volume: 6 chips on their own, narrower pitch.
+static_assert(CARD_IN_X0 + (VOL_STEPS - 1) * VOL_CHIP_PITCH + VOL_CHIP_W
                   <= CARD_IN_X1 + 1,
               "volume chips run past the card");
 // Settings toggle row: the two half cards and their gap must tile the full
@@ -139,9 +139,9 @@ static_assert(2 * TGL_CARD_W + TGL_CARD_GAP == CARD_W,
               "toggle cards do not tile the card width");
 static_assert(CARD_X + TGL_CARD_PITCH + TOGGLE_DX + TOGGLE_W == CARD_IN_X1,
               "right-hand toggle does not end where a full-width one did");
-// icoSpeaker draws one wave per step above mute, and the 15px grid has room
-// for three.
-static_assert(VOL_STEPS == 4, "icoSpeaker draws VOL_STEPS - 1 waves, max 3");
+// volWaves() pairs volume steps onto speaker waves, and the 15px grid has
+// room for three.
+static_assert(VOL_STEPS / 2 <= 3, "volWaves() would ask icoSpeaker for >3 waves");
 
 // Same rule for the Scenes grid, asserted twice for two distinct failures, and
 // BOTH are bounds now rather than one bound and one equality. The y one used to

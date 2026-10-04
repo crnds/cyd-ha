@@ -186,31 +186,63 @@
 #define TOCK_HZ        420
 #define TOCK_F2_X      2.76f     // overtone ratio, a wood-block partial
 #define TOCK_P2        0.6f      // overtone level, relative to the fundamental
-#define TOCK_TAU1_US   7000      // fundamental decay time constant
+// 10 ms, up from 7: loudness is judged over a far longer window than this
+// sound lasts, so a longer ring reads as louder at the same peak. It still
+// dies fast enough to be a knock and not a note.
+#define TOCK_TAU1_US   10000     // fundamental decay time constant
 #define TOCK_TAU2_US   1800      // overtone decay — much faster, it's the knock
-// ~5 tau1: the envelope is under 1% there, which is below one DAC step at the
-// loudest volume, so stopping costs no audible click. BLOCKS loop() for this
-// long — see beep() in main.cpp for why that is the right trade here.
-#define TOCK_MS        35
+// 6 tau1: the tail is ~1.6 DAC steps by then, and TOCK_FADE_MS takes it the
+// rest of the way to exactly 0 so the hand-back to GPIO LOW is seamless.
+// BLOCKS loop() for this long — see beep() in main.cpp for why that is the
+// right trade here.
+#define TOCK_MS        60
+#define TOCK_FADE_MS   5
+// LOUDNESS. At 100% the DAC is already at full swing, so the only way to get
+// louder is the waveform's shape — two things, both load-bearing:
+//   - beep() scales by the waveform's MEASURED peak, not the worst case of both
+//     partials peaking on the same sample, which never happens — the first DAC
+//     version scaled for it and topped out at 87 of 127 steps.
+//   - it is then driven into a tanh soft clip by TOCK_DRIVE. Only the loud
+//     attack flattens toward a square, which adds harmonics in the 1-3 kHz
+//     band this speaker is efficient in; the decaying tail falls back under
+//     the knee and stays a clean sine, so it doesn't turn nasal the way the
+//     LEDC-duty volume did. Output still never exceeds amp.
+// Modelled together with the longer TOCK_TAU1_US: ~+9.4 dB of energy against
+// the first DAC version. 3.5 buys only ~1.3 dB more, for audibly more fuzz.
+// Still too quiet? The next lever is TOCK_HZ, not this: the speaker is simply
+// more efficient higher up.
+#define TOCK_DRIVE     2.5f
 // 16 kHz is ~13x the overtone's ~1.16 kHz, plenty for a sine this short, and at
-// 62.5 us per sample leaves the per-sample maths (two expf + two sinf) room.
+// 62.5 us per sample leaves the per-sample maths (two expf + two cosf) room.
 #define TOCK_RATE_HZ   16000
-// The DAC idles at mid-scale, and the tock swings either side of it. It is
-// ramped there slowly at boot rather than jumped, since the amp's input is AC
-// coupled and a 0 -> 1.65 V step is a pop.
-#define DAC_MID        128
+// IDLE IS GROUND, and the tock rises from it and returns to it — there is no
+// mid-scale bias. The first DAC version idled at mid-scale (128, ~1.65 V) and
+// swung either side, which HISSED AND CRACKLED FOREVER: the DAC's output is a
+// fraction of its own 3.3 V supply, so holding half-scale passes half of every
+// supply disturbance — Wi-Fi TX bursts, the 50 Hz loop(), SPI to the panel —
+// straight into the amp. Between tocks the pin is now a plain GPIO driven LOW
+// with the DAC off, which is exactly what the (quiet) LEDC builds idled at.
+// The price is that the tock is unipolar: each partial is (1 - cos), which
+// starts at 0 with zero slope, so it needs no bias and makes no pop. Its
+// average rides up and back down with the envelope — a thump mostly below
+// what this speaker reproduces, which if anything adds body. Modelled at
+// ~-1 dB in the audible band against the biased version.
 
-// Volume is a setting (Settings page, persisted in NVS), 4 steps from mute to
-// max, as the tock's PEAK AMPLITUDE in DAC steps either side of DAC_MID — a
-// true amplitude now, where the square-wave versions could only fake one with
-// duty. Picked for roughly even loudness rather than even steps: ~-18 dB,
-// ~-8 dB, 0 dB against max. 127 is the full swing. 0 is a true mute: beep()
-// skips the sound and its TOCK_MS stall entirely.
-#define VOL_STEPS      4
-#define VOL_AMP_LIST   { 0, 16, 50, 127 }
-#define VOL_LABEL_LIST { "0%", "33%", "67%", "100%" }
-// 67%, since this sits in a bedroom.
-#define VOL_DEFAULT    2
+// Volume is a setting (Settings page, persisted in NVS), 6 steps from mute to
+// max, as the tock's PEAK in DAC steps above ground — a true amplitude, where
+// the square-wave versions could only fake one with duty. 255 is the full
+// swing. 0 is a true mute: beep() skips the sound and its stall.
+// The labels are percentages but the amplitudes are an AUDIO TAPER, 5 dB
+// apart (-20, -15, -10, -5, 0 dB): loudness is heard logarithmically, so a
+// linear 51/102/153/204/255 would sound like one quiet step and four nearly
+// identical loud ones. 5 dB keeps the whole ladder inside the -20 dB range the
+// 4-step version spanned, so 20% is no quieter than the old quietest step.
+#define VOL_STEPS      6
+#define VOL_AMP_LIST   { 0, 26, 45, 81, 143, 255 }
+#define VOL_LABEL_LIST { "0%", "20%", "40%", "60%", "80%", "100%" }
+// 60% (-10 dB), the nearest to the 4-step version's 67% default, since this
+// sits in a bedroom.
+#define VOL_DEFAULT    3
 
 // ── Night mode ───────────────────────────────────────────
 // The schedule WRITES the Night mode toggle at these boundaries rather than
@@ -542,6 +574,12 @@
 #define CHIP_W         54
 #define CHIP_GAP       SP_1
 #define CHIP_PITCH     (CHIP_W + CHIP_GAP)           // 58
+// Volume's 6 chips can't share that width: 6*54 + 5*4 = 344 against the card's
+// 288. 44 is the widest that fits — 6*44 + 5*4 = 284 (x 16..299) — and "100%"
+// is 33px of Font 2, so it still has 5px a side. A fourth chip width on the
+// panel, joining BULB_CHIP_W/CHIP_W/ACM_W; same trade as the bulb chip made.
+#define VOL_CHIP_W     44
+#define VOL_CHIP_PITCH (VOL_CHIP_W + CHIP_GAP)       // 48
 
 // ── bulb card: ONE INLINE ROW ────────────────────────────
 // [icon name] [OFF][1%][30%][100%] (o)(o)  — identity and controls on the same
@@ -628,7 +666,7 @@
 
 // ── Settings page ────────────────────────────────────────
 // 5 settings on the same 4-row grid. Rows 0..2 are discrete segmented controls
-// (5 chips, 3 chips, 4 chips); row 3 is the two toggles SIDE BY SIDE, as two
+// (5 chips, 3 chips, 6 chips); row 3 is the two toggles SIDE BY SIDE, as two
 // half-width cards. That pairing is what made room for Volume without a 5th
 // row — the rows still tile the body exactly, and the price was the toggles'
 // captions ("23:45 - 08:00", "Rotate 180 degrees") and their long titles,
@@ -637,7 +675,7 @@
 #define SET_ROWS       4
 #define SET_ROW_BRI    0                  // 5 chips on the shared chip pitch
 #define SET_ROW_NIGHT  1                  // 3 chips: Off / Shift / Red
-#define SET_ROW_VOL    2                  // 4 chips: 0% (mute) .. 100%
+#define SET_ROW_VOL    2                  // 6 chips: 0% (mute) .. 100%, narrower
 #define SET_ROW_TGL    3                  // two half-width toggle cards
 #define NIGHT_CHIPS    3     // Off / Shift / Red — see NIGHT_CHIP_MODE in state.h
 // The toggle row's cells, in x order. This is Hit::sub on SET_ROW_TGL, the same

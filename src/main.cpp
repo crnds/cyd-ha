@@ -39,10 +39,6 @@ static_assert(BL_PWM_BITS == 8,
               "BRI_DUTY_LIST is expressed out of 255; rescale it if the "
               "resolution changes");
 
-// The tock swings +-amp about DAC_MID on an 8-bit DAC, so the loudest volume
-// must not clip either rail.
-static_assert(DAC_MID + 127 <= 255 && DAC_MID - 127 >= 0,
-              "VOL_AMP_LIST's 127 would clip the DAC about DAC_MID");
 
 // Software-SPI XPT2046 on the dedicated CYD touch pins. Used only for its
 // begin()/setCalibration() pin setup — reads go through xptRead() below.
@@ -168,7 +164,10 @@ static Preferences prefs;
 #define K_NIGHT "s.nit"
 #define K_SCHED "s.nsch"
 #define K_FLIP  "s.flip"
-#define K_VOL   "s.vol"
+// "s.vol6", not "s.vol": the 4-step version stored its index under "s.vol",
+// and read back against the 6-step table those indices mean different levels
+// (its 100% would come back as 60%). A new key just starts at VOL_DEFAULT.
+#define K_VOL   "s.vol6"
 
 static void settingsLoad() {
   if (!prefs.begin(NVS_NAMESPACE, false)) {
@@ -549,7 +548,7 @@ static void doScene(int16_t idx) {
 // HTTP_READ_SVC_MS — the sound would stall mid-note for 1.5 s on every device
 // tap. Driving the DAC from a timer ISR or an I2S DMA buffer would avoid the
 // wait, but either is a second thread of execution, which this firmware has
-// none of on purpose. 35 ms before the optimistic repaint is imperceptible.
+// none of on purpose. 60 ms before the optimistic repaint is imperceptible.
 //
 // At the Volume setting's amplitude, and not at all when muted — returning
 // before the loop means a muted panel doesn't pay the stall either.
@@ -557,31 +556,69 @@ static void doScene(int16_t idx) {
 // Samples go out through dac_output_voltage(), not dacWrite(): the Arduino
 // wrapper re-runs dac_output_enable() — pad and RTC-GPIO init — on every call,
 // which is set-up work, not a sample write, and far too heavy to repeat 16000
-// times a second. setup()'s ramp uses dacWrite() once, so the pad is already on.
+// times a second. beep() enables the DAC once per tock instead.
 //
 // Sample timing is a busy-wait on an absolute deadline per sample rather than a
-// delayMicroseconds() per sample, so the maths and dacWrite() cost don't
+// delayMicroseconds() per sample, so the maths and DAC write cost don't
 // accumulate into a slower, flatter-pitched sound, and an interrupt landing
 // mid-sound (Wi-Fi) only delays one sample instead of shifting every one after.
+// Between tocks the speaker pin is a plain GPIO driven LOW with the DAC off —
+// NOT a DAC held at some level. See the IDLE IS GROUND note in config.h: a DAC
+// parked at mid-scale fed supply noise to the amp and crackled constantly.
+// pinMode() goes through gpio_config(), which releases the pad from the RTC
+// mux the DAC put it on, so the digital driver really does own it again.
+static void speakerIdle() {
+  dac_output_disable(SPEAKER_DAC);
+  pinMode(PIN_SPEAKER, OUTPUT);
+  digitalWrite(PIN_SPEAKER, LOW);
+}
+
+// The raw two-partial waveform at sample i, before any scaling. Unipolar:
+// each partial is (1 - cos), so it starts at exactly 0 with zero slope and
+// never goes below it — the tock rises out of the grounded idle and needs no
+// bias to swing around.
+static float tockSample(uint32_t i) {
+  const float w1 = 2.0f * (float)M_PI * TOCK_HZ;
+  const float t  = (float)i / TOCK_RATE_HZ;                   // seconds
+  const float us = t * 1e6f;
+  return expf(-us / TOCK_TAU1_US) * (1.0f - cosf(w1 * t))
+       + TOCK_P2 * expf(-us / TOCK_TAU2_US) * (1.0f - cosf(w1 * TOCK_F2_X * t));
+}
+
 static void beep() {
   const uint8_t amp = VOL_AMP[S.set.volIdx];
   if (amp == 0) return;
-  const uint32_t n  = (uint32_t)TOCK_RATE_HZ * TOCK_MS / 1000;
-  const float    w1 = 2.0f * (float)M_PI * TOCK_HZ;
-  const float    w2 = w1 * TOCK_F2_X;
-  // Normalise so the two partials together peak at `amp`, never past it.
-  const float    k  = amp / (1.0f + TOCK_P2);
+  const uint32_t n = (uint32_t)TOCK_RATE_HZ * TOCK_MS / 1000;
+  const uint32_t fade = (uint32_t)TOCK_RATE_HZ * TOCK_FADE_MS / 1000;
+  // The waveform's MEASURED peak, not the worst case of both partials peaking
+  // on the same sample — that never happens, and scaling for it is what once
+  // left the tock at 87 of 127 DAC steps. Deterministic, so it is measured
+  // once, on the first tap, outside the timed loop.
+  static float peak = 0.0f;
+  if (peak == 0.0f)
+    for (uint32_t i = 0; i < n; i++) peak = fmaxf(peak, tockSample(i));
+  // tanh soft clip (see TOCK_DRIVE in config.h): the attack's peaks flatten
+  // for loudness, the quiet tail stays clean. Dividing by tanh(TOCK_DRIVE) maps
+  // the peak back to exactly amp, and tanh keeps 0 at 0, so the output stays
+  // inside 0..amp and the tock still starts from ground.
+  const float k = amp / tanhf(TOCK_DRIVE);
+  const float g = TOCK_DRIVE / peak;
+  // First sample is 0, the level the GPIO was holding, so enabling the DAC
+  // under it is not a step.
+  dac_output_voltage(SPEAKER_DAC, 0);
+  dac_output_enable(SPEAKER_DAC);
   const uint32_t t0 = micros();
   for (uint32_t i = 0; i < n; i++) {
-    const float t  = (float)i / TOCK_RATE_HZ;                 // seconds
-    const float us = t * 1e6f;
-    const float v  = expf(-us / TOCK_TAU1_US) * sinf(w1 * t)
-                   + TOCK_P2 * expf(-us / TOCK_TAU2_US) * sinf(w2 * t);
-    dac_output_voltage(SPEAKER_DAC, (uint8_t)(DAC_MID + lroundf(k * v)));
+    float v = k * tanhf(g * tockSample(i));
+    // Raised-cosine fade over the last TOCK_FADE_MS, so the tail lands on
+    // exactly 0 rather than stepping there from ~1.6 DAC steps.
+    if (i + fade >= n)
+      v *= 0.5f * (1.0f + cosf((float)M_PI * (i + fade - n + 1) / fade));
+    dac_output_voltage(SPEAKER_DAC, (uint8_t)lroundf(v));
     const uint32_t due = (uint32_t)(((uint64_t)(i + 1) * 1000000ULL) / TOCK_RATE_HZ);
     while (micros() - t0 < due) {}
   }
-  dac_output_voltage(SPEAKER_DAC, DAC_MID);
+  speakerIdle();
   // Should read ~TOCK_MS * 1000. Much longer means the per-sample work is
   // overrunning 1/TOCK_RATE_HZ and the tock is playing slow and flat.
   Serial.printf("tock: amp=%u %u samples in %u us\n", (unsigned)amp,
@@ -1078,15 +1115,10 @@ void setup() {
                 (unsigned)BL_PWM_HZ, (unsigned)blHz);
   ledcAttachPin(PIN_BACKLIGHT, BL_CHANNEL);
 
-  // Tap sound: bring the DAC up to the mid-scale the tock swings about, SLOWLY.
-  // The amp's input is AC coupled, so jumping 0 -> DAC_MID in one write is a
-  // 1.65 V step, i.e. a pop out of the speaker on every boot; ~200 ms of ramp
-  // is below what the coupling passes. The DAC then holds there for good,
-  // which also keeps GPIO 26 from floating into the amp and humming.
-  for (uint16_t v = 0; v <= DAC_MID; v++) {
-    dacWrite(PIN_SPEAKER, (uint8_t)v);
-    delayMicroseconds(1500);
-  }
+  // Tap sound: park the speaker pin at ground. Driven LOW rather than left
+  // floating into the amp, which would hum, and rather than a DAC level, which
+  // crackled (see speakerIdle()).
+  speakerIdle();
   // Seeds all three memoised effects through the same path that maintains
   // them, so nothing can desync from the panel.
   applySettings();

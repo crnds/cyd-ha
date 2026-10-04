@@ -51,9 +51,10 @@ void icoMoon(int16_t cx, int16_t cy, uint16_t c, uint16_t bg);
 void icoClock(int16_t cx, int16_t cy, uint16_t c);
 void icoRotate(int16_t cx, int16_t cy, uint16_t c);
 // A speaker cone. It carries the volume itself, not just the row's identity:
-// `level` 0 draws a cross (mute), 1..3 draw that many sound waves — so a muted
-// panel is visible from the page without reading the chips.
-void icoSpeaker(int16_t cx, int16_t cy, uint16_t c, uint8_t level);
+// `waves` 0 draws a cross (mute), 1..3 draw that many sound waves — so a muted
+// panel is visible from the page without reading the chips. The caller maps
+// its volume step onto 0..3; the grid has room for no more than three.
+void icoSpeaker(int16_t cx, int16_t cy, uint16_t c, uint8_t waves);
 
 // A solid triangle, for the stepper and the scroll gutter. Solid rather than a
 // stroked chevron because direction has to survive being read across a dark

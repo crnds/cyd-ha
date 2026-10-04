@@ -889,7 +889,8 @@ control shows *which* of five is selected but not what the selection *means*, an
 "50%" spelled out is the difference between a row of chips and a row of chips you
 can read.
 
-**Later: Volume.** A fifth setting (4 chips, 0% mute to 100%) took row 2, and the
+**Later: Volume.** A fifth setting (6 chips, 0% mute to 100% in 20% steps, on
+a narrower 44px chip since six don't fit at 54) took row 2, and the
 two toggles moved onto row 3 together as two half-width cards ("Schedule",
 "Flip") — keeping the page at four full-height rows rather than cutting five
 shorter ones. The price was the toggles' captions, which a 150px card has no

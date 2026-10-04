@@ -1137,32 +1137,52 @@ It took three tries, and the two failures are the thing to keep:
   amplitude is also what makes volume honest.
 
 Four things about the implementation:
-- It **blocks for `TOCK_MS`** (35 ms) on purpose, since a start-here/finish-in-
+- It **blocks for `TOCK_MS`** (60 ms) on purpose, since a start-here/finish-in-
   `loop()` sound would stall mid-note for the whole blocking HTTP call behind a
   device tap, and a timer ISR or I2S DMA would be a second thread of execution.
 - Samples go out through **`dac_output_voltage()`, not `dacWrite()`** — the
   Arduino wrapper re-runs pad/RTC-GPIO init on every call. Timing is a busy-wait
-  on an absolute per-sample deadline, and each tock logs `tock: amp=.. 560
-  samples in N us`; N should be ~35000 (measured 35007), and much more means
-  the per-sample maths is overrunning and the pitch has gone flat.
-- The DAC **idles at `DAC_MID` (128)** and is **ramped there over ~200 ms at
-  boot** rather than jumped, since the amp input is AC coupled and a 0 → 1.65 V
-  step would pop the speaker on every boot.
+  on an absolute per-sample deadline, and each tock logs `tock: amp=.. 960
+  samples in N us`; N should be ~`TOCK_MS` × 1000 (measured 60008 at 60 ms),
+  and much more means the per-sample maths is overrunning and the pitch has
+  gone flat.
+- **Idle is GROUND: a GPIO driven LOW with the DAC off** (`speakerIdle()`), and
+  the tock is **unipolar** — each partial is `(1 - cos)`, so it rises from 0
+  with zero slope, and a 5 ms fade lands it back on exactly 0. The first DAC
+  build idled the DAC at mid-scale (128, ~1.65 V) and swung either side, which
+  **crackled and buzzed constantly at idle**: the DAC's output is a fraction of
+  its own 3.3 V supply, so half-scale passes half of every supply disturbance
+  (Wi-Fi TX bursts, the 50 Hz `loop()`, SPI to the panel) straight into the
+  amp. Don't reintroduce a mid-scale bias or leave the DAC enabled between
+  tocks. The LEDC builds were quiet at idle for the same reason — the pin was
+  driven low.
 - A **miss is silent**, so the AC setpoint readout's dead cell still says
   "nothing happened".
+- **Its loudness comes from its shape, since 100% is already full DAC swing.**
+  `beep()` scales by the waveform's *measured* peak (the first version scaled
+  for both partials peaking at once, which never happens, and topped out at
+  87 of 127 steps), then drives it into a `tanh` soft clip (`TOCK_DRIVE`) so the
+  attack gains harmonics the speaker reproduces well while the tail stays a
+  sine. Don't "simplify" either away, and if it is ever still too quiet, raise
+  `TOCK_HZ` before raising the drive.
 
-**Volume is a Settings row** (`SET_ROW_VOL`, 4 chips: 0% mute / 33% / 67% /
-100%), persisted as `s.vol`. Three things about it:
-- **Volume is the tock's peak AMPLITUDE** in DAC steps either side of
-  `DAC_MID`: `VOL_AMP_LIST` `{0, 16, 50, 127}`, picked for roughly even
-  *loudness* (~-18 / -8 / 0 dB) rather than even steps. 127 is the full swing,
-  and a `static_assert` stops it clipping.
+**Volume is a Settings row** (`SET_ROW_VOL`, 6 chips: 0% mute / 20% / 40% /
+60% / 80% / 100%), persisted as `s.vol6`. The key is new because the 4-step
+version's `s.vol` indices mean different levels against the 6-step table.
+Six chips do not fit at `CHIP_W` (344px against 288), so this row alone uses
+`VOL_CHIP_W` 44 — a fourth chip width, known only to `settingChipRect()`. Three things about it:
+- **Volume is the tock's peak AMPLITUDE** in DAC steps above ground:
+  `VOL_AMP_LIST` `{0, 26, 45, 81, 143, 255}` — an audio taper 5 dB apart
+  (-20 … 0 dB), because loudness is heard logarithmically and linear
+  percentages would give one quiet step and four near-identical loud ones. 255 is the full swing; `tanh`
+  keeps the output inside 0..amp, so it cannot clip.
 - **A Volume chip beeps AFTER acting, every other tap before.** `dispatchHit()`
   skips it and `doSetting()` beeps once the new level is set, so the beep is a
   preview of the level just picked — and tapping the already-selected chip still
-  beeps, since that is how you hear it. Mute skips the tone *and* the 30 ms stall.
-- **The speaker icon carries the level** (a cross at mute, then 1–3 waves), so
-  it is not chrome: it repaints with the level label on `setSnap.volShown`.
+  beeps, since that is how you hear it. Mute skips the tone *and* the 60 ms stall.
+- **The speaker icon carries the level** (a cross at mute, then the five
+  audible steps paired onto 1, 1, 2, 2, 3 waves by `volWaves()`), so it is
+  not chrome: it repaints with the level label on `setSnap.volShown`.
 
 **It cost the toggles their captions.** The page is still exactly 4 rows —
 chosen on request over re-cutting it into five shorter ones, which would have

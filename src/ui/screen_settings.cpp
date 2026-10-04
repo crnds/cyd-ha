@@ -22,13 +22,23 @@ static const char* const NIGHT_LABEL[NIGHT_CHIPS] = { "OFF", "SHIFT", "RED" };
 
 SettingSnap setSnap;
 
-// All three Settings chip rows (5 brightness, 3 night-mode, 4 volume chips)
-// share one chip pitch, so a control on any of them is the same size, and
-// differ only in which row they sit on.
+// The Settings chip rows (5 brightness, 3 night-mode chips) share one chip
+// pitch, so a control on either is the same size, and differ only in which
+// row they sit on.
+//
+// Except Volume: six chips don't fit at CHIP_W, so that row alone uses the
+// narrower VOL_CHIP_W. This is still the only function that knows it — the
+// renderer and the hit test both go through here.
 Rect settingChipRect(uint8_t row, uint8_t i) {
-  return { (int16_t)(CARD_IN_X0 + i * CHIP_PITCH), (int16_t)(cardTop(row) + CTL_DY),
-           (int16_t)CHIP_W, (int16_t)CTL_H };
+  const int16_t w     = row == SET_ROW_VOL ? VOL_CHIP_W : CHIP_W;
+  const int16_t pitch = row == SET_ROW_VOL ? VOL_CHIP_PITCH : CHIP_PITCH;
+  return { (int16_t)(CARD_IN_X0 + i * pitch), (int16_t)(cardTop(row) + CTL_DY),
+           w, (int16_t)CTL_H };
 }
+
+// Volume step -> speaker waves: mute is the cross, then the five audible steps
+// pair up onto 1, 1, 2, 2, 3 waves, so 100% alone gets the full three.
+static uint8_t volWaves(uint8_t idx) { return (uint8_t)((idx + 1) / 2); }
 
 static int16_t tglCardX(uint8_t t) { return (int16_t)(CARD_X + t * TGL_CARD_PITCH); }
 
@@ -142,7 +152,7 @@ void drawSettings() {
     setSnap.volShown = (int8_t)S.set.volIdx;
     const int16_t top = cardTop(SET_ROW_VOL);
     tft.fillRect(CARD_ICO_CX - 7, top + CARD_L1_Y, 15, CARD_L1_H, C_SURFACE);
-    icoSpeaker(CARD_ICO_CX, top + CARD_L1_CY, C_TEXT2, S.set.volIdx);
+    icoSpeaker(CARD_ICO_CX, top + CARD_L1_CY, C_TEXT2, volWaves(S.set.volIdx));
     drawLevelLabel(SET_ROW_VOL, VOL_LABEL[S.set.volIdx]);
   }
   drawChipRow(SET_ROW_VOL, VOL_STEPS, VOL_LABEL, S.set.volIdx, setSnap.volVis,
