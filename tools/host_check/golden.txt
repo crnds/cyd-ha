@@ -8322,14 +8322,14 @@ volRect v=1 -> x=74 y=126 w=54 h=26
 volRect v=2 -> x=132 y=126 w=54 h=26
 volRect v=3 -> x=190 y=126 w=54 h=26
 == tabRect ==
-tabRect t=0 -> x=0 w=8
-tabRect t=1 -> x=16 w=8
-tabRect t=2 -> x=32 w=8
+tabRect t=0 -> x=145 w=8
+tabRect t=1 -> x=161 w=8
+tabRect t=2 -> x=177 w=8
 == screenHitTest ==
-hitTestHash page=devices -> 672d099e94c8c60b
+hitTestHash page=devices -> b393f31cd3aee20b
 hitTest page=devices (0,0) -> kind=0 idx=-1 sub=-1
 hitTest page=devices (319,0) -> kind=0 idx=-1 sub=-1
-hitTest page=devices (0,239) -> kind=1 idx=0 sub=-1
+hitTest page=devices (0,239) -> kind=0 idx=-1 sub=-1
 hitTest page=devices (319,239) -> kind=0 idx=-1 sub=-1
 hitTest page=devices (160,120) -> kind=2 idx=2 sub=2
 hitTest page=devices (10,210) -> kind=0 idx=-1 sub=-1
@@ -8337,10 +8337,10 @@ hitTest page=devices (128,180) -> kind=2 idx=3 sub=1
 hitTest page=devices (250,180) -> kind=0 idx=-1 sub=-1
 hitTest page=devices (301,180) -> kind=2 idx=3 sub=3
 hitTest page=devices (160,145) -> kind=2 idx=2 sub=2
-hitTestHash page=scenes -> cc6c2c09a1b169eb
+hitTestHash page=scenes -> a49dcdd8b67785eb
 hitTest page=scenes (0,0) -> kind=3 idx=0 sub=-1
 hitTest page=scenes (319,0) -> kind=0 idx=-1 sub=-1
-hitTest page=scenes (0,239) -> kind=1 idx=0 sub=-1
+hitTest page=scenes (0,239) -> kind=0 idx=-1 sub=-1
 hitTest page=scenes (319,239) -> kind=0 idx=-1 sub=-1
 hitTest page=scenes (160,120) -> kind=3 idx=4 sub=-1
 hitTest page=scenes (10,210) -> kind=0 idx=-1 sub=-1
@@ -8348,10 +8348,10 @@ hitTest page=scenes (128,180) -> kind=2 idx=3 sub=1
 hitTest page=scenes (250,180) -> kind=0 idx=-1 sub=-1
 hitTest page=scenes (301,180) -> kind=2 idx=3 sub=3
 hitTest page=scenes (160,145) -> kind=0 idx=-1 sub=-1
-hitTestHash page=settings -> 1c5de9d82ed5c023
+hitTestHash page=settings -> ec32ceb2f9f26c23
 hitTest page=settings (0,0) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (319,0) -> kind=0 idx=-1 sub=-1
-hitTest page=settings (0,239) -> kind=1 idx=0 sub=-1
+hitTest page=settings (0,239) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (319,239) -> kind=0 idx=-1 sub=-1
 hitTest page=settings (160,120) -> kind=5 idx=2 sub=2
 hitTest page=settings (10,210) -> kind=0 idx=-1 sub=-1
@@ -8407,10 +8407,10 @@ bulb press b=5 expired delta=2
 bulb press b=5 cleared-repeat delta=0
 bulb press-on-other-row delta=0
 == drawStatusRoom dirty-region deltas ==
-room first-draw delta=6
+room first-draw delta=7
 room repeat-unchanged delta=0
-room temp-changed delta=7
+room temp-changed delta=8
 room repeat-unchanged-2 delta=0
-room temp-changed-2 delta=7
-room humidity-changed delta=16
+room temp-changed-2 delta=8
+room humidity-changed delta=19
 room repeat-unchanged-3 delta=0

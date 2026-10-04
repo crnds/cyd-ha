@@ -85,29 +85,34 @@ const SP_1=4, SP_2=8, SP_3=12, SP_4=16, SP_6=24;
 // header — anchored to the BOTTOM edge, not the top. Moved on request; the
 // divider is now at the TOP of the band (the seam with the body above it), and
 // content sits below it, mirrored from the old top-anchored layout.
-// THREE regions, tiling the bar exactly (171 + 80 + 69 = 320). The fourth was a
-// 26px connectivity glyph at x 0..25 (STATUS_ICO_W), with the tab strip starting
-// after it at TAB_X0 26; it is gone, replaced by the NOCONN_* body overlay below,
-// and TAB_X0 is 0 as a result.
+// THREE regions, tiling the bar exactly (80 + 171 + 69 = 320):
+//   room reading  x   0.. 79   STATUS_ROOM_W, left edge
+//   tab strip     x  80..250   TAB_STRIP_W, the tabs CENTRED in it
+//   clock         x 251..319   STATUS_CLK_W, right edge
+// ROOM | TABS | CLOCK is a swap, on request — it used to be tabs | room | clock
+// with the strip flush left at x 0. Same widths, new order. The 26px connectivity
+// glyph that once sat at x 0..25 is gone, replaced by the NOCONN_* body overlay.
 //
-// BOTH NUMBER REGIONS ARE F_NUM NOW — up a size on request, spending the 26px the
-// glyph freed plus 8px from a TAB_GAP cut (12->8, still on the SP_* scale; it went
-// 18->12 for the previous bump, so this is its second cut for the same buyer).
-// There is no size between F_TITLE and F_NUM — TFT_eSPI has no Font 3 or 5 — so
-// "one size up" is 10px caps -> 18px and 1.8x the width.
-//   clock 69 = "23:45"(63) + 6px right margin, zero left slack (was 41 = 35+6)
-//   room  80 = "27"(28) + ring(5) + gap(4) + "99"(28) + "%"(9, TITLE) = 74, +6
-// Two pieces deliberately did NOT grow: "%" stays TITLE (F_NUM's is 21px, which
-// this region does not have) and is drawn BASELINE-ALIGNED to the big digits, and
-// the ring stays a 2px circle to match the one wValue() draws beside the AC
-// setpoint's F_NUM digits. The trailing "/" is GONE — vestigial at MICRO beside
-// 18px digits, and the 6px of room slack now separates the two blocks instead.
-// That 6px is deliberate, not leftover: don't spend it.
+// BOTH NUMBER REGIONS ARE F_NUM — up a size on request, spending the 26px the
+// glyph freed plus 8px from a TAB_GAP cut (12->8, still on the SP_* scale; it
+// went 18->12 for the previous bump). There is no size between F_TITLE and F_NUM
+// — TFT_eSPI has no Font 3 or 5 — so "one size up" is 1.8x the width.
+// STATUS_EDGE_DX is the blank at each outer edge, mirrored: the clock's right
+// margin and the room reading's left one.
+//   clock 69 = "23:45"(63) + 6 edge, zero left slack
+//   room  80 = 6 edge + "27"(28) + ring(5) + gap(4) + "99"(28) + "%"(9) = 80
+// The room's zero slack is fine: the tab strip's 2px margin + TAB_LBL_DX are the
+// gap to "Devices". A reading too wide for it drops its digits to TITLE rather
+// than spill into the tab strip, which (unlike the clock) never repaints it away.
+// Two pieces deliberately did NOT grow: "%" stays TITLE (F_NUM's is 21px) and is
+// drawn BASELINE-ALIGNED to the big digits, and the ring stays a 2px circle to
+// match the one wValue() draws beside the AC setpoint. The trailing "/" is GONE.
 // Humidity's budget is still 2 digits, not 3 ("100%") — an indoor AC'd bedroom
 // sensor doesn't read 100% RH any more than the room reads -10C.
-const STATUS_H=32, STATUS_Y0=SCR_H-STATUS_H, TAB_X0=0, TAB_GAP=SP_2,
-      TAB_COUNT=3, STATUS_CLK_W=69, STATUS_ROOM_W=80,
-      TAB_STRIP_W=SCR_W-STATUS_ROOM_W-STATUS_CLK_W-TAB_X0,
+const STATUS_H=32, STATUS_Y0=SCR_H-STATUS_H, TAB_GAP=SP_2,
+      TAB_COUNT=3, STATUS_CLK_W=69, STATUS_ROOM_W=80, STATUS_EDGE_DX=6,
+      TAB_X0=STATUS_ROOM_W,
+      TAB_STRIP_W=SCR_W-STATUS_ROOM_W-STATUS_CLK_W,
       STATUS_DIV_Y=STATUS_Y0, STATUS_CY=STATUS_DIV_Y+16;
 // Underline indicator, seated on the header rule FROM BELOW now (the rule is at
 // the top of the band). 2px so "Settings"' descenders keep clear of it —
@@ -1021,18 +1026,16 @@ function drawSettings(){
 }
 
 // Mirrors tabRect() in screen.cpp: each tab's cell hugs its OWN label (measured
-// via textW, not a shared width constant), and the strip is FLUSH LEFT at
-// TAB_X0 (0) with all the leftover TAB_STRIP_W collecting as one right-hand
-// margin before the room reading. It used to be centred, which made sense while
-// TAB_X0 was 26 and the left margin was really the gap to the connectivity
-// glyph; with that glyph deleted the same split left ~22px of blank bottom-left
-// corner, so the tabs were anchored to the edge on request.
+// via textW, not a shared width constant), and the strip is CENTRED in
+// TAB_STRIP_W starting at TAB_X0 (80), between the room reading on the left
+// and the clock on the right. The leftover after 3 content-fit cells + 2 gaps
+// is split evenly into two outer margins.
 let _tabCells=null;
 function tabRect(i){
   if(!_tabCells){
     const w=TAB_LABEL.map(t=>textW('MICRO',t)+2*TAB_LBL_DX);
     const total=w.reduce((a,b)=>a+b,0)+(TAB_COUNT-1)*TAB_GAP;
-    let cx=TAB_X0;
+    let cx=TAB_X0+Math.floor((TAB_STRIP_W-total)/2);
     _tabCells=w.map(cw=>{ const cell={x:cx,w:cw}; cx+=cw+TAB_GAP; return cell; });
     if(total>TAB_STRIP_W) warn(`tab labels (${total}px incl. gaps) overrun the ${TAB_STRIP_W}px strip`);
   }
@@ -1040,31 +1043,37 @@ function tabRect(i){
 }
 
 // Mirrors drawStatusRoom() in screen.cpp: <temp><ring> <humidity>%, left-aligned
-// from the room region's left edge, immediately before the clock. dev[NUM_BULBS]
-// is the AC (config.h: "Devices 0..2 are the bulbs, device 3 is the AC"), same
-// assumption the firmware makes.
+// STATUS_EDGE_DX in from the screen edge, immediately before the tab strip.
+// dev[NUM_BULBS] is the AC (config.h), same assumption the firmware makes.
 //
-// The numbers are NUM now; the "%" stays TITLE and rides the big digits' BASELINE
+// The numbers are NUM; the "%" stays TITLE and rides the big digits' BASELINE
 // (BASE.NUM - BASE.TITLE), since an M* datum centres each role on its own box and
 // the same cy would leave it floating mid-height. The old trailing "/" is gone.
+// A reading too wide for the region drops its digits to TITLE (see the firmware).
+function roomReadingW(role,room,hum){
+  return textW(role,room.s)+(room.deg?5:0)+SP_1+(hum?textW(role,hum)+textW('TITLE','%'):0);
+}
 function drawStatusRoom(){
   const d=dev[NUM_BULBS], err=isErr();
   const fg=(err||!d.avail)?C.ERROR:(stale?C.DIM:C.TEXT2);
   const room=roomTempText(d), hum=humidityText(d);
-  const pctCy=STATUS_CY+(BASE.NUM-BASE.TITLE);
-  let x=SCR_W-STATUS_ROOM_W-STATUS_CLK_W;
-  gtext('NUM',room.s,x,STATUS_CY,'left',fg);
-  x+=textW('NUM',room.s);
-  if(room.deg){ disc(x+3,STATUS_CY+INK_TOP.NUM+2,2,null,fg); x+=5; }
+  const role=roomReadingW('NUM',room,hum)<=STATUS_ROOM_W-STATUS_EDGE_DX?'NUM':'TITLE';
+  if(role!=='NUM')
+    warn(`header room reading "${room.s}/${hum}" too wide at NUM — drawn in TITLE`);
+  const pctCy=STATUS_CY+(BASE[role]-BASE.TITLE);
+  let x=STATUS_EDGE_DX;
+  gtext(role,room.s,x,STATUS_CY,'left',fg);
+  x+=textW(role,room.s);
+  if(room.deg){ disc(x+3,STATUS_CY+INK_TOP[role]+2,2,null,fg); x+=5; }
   x+=SP_1;
   if(hum){
-    gtext('NUM',hum,x,STATUS_CY,'left',fg);
-    x+=textW('NUM',hum);
+    gtext(role,hum,x,STATUS_CY,'left',fg);
+    x+=textW(role,hum);
     gtext('TITLE','%',x,pctCy,'left',fg);
     x+=textW('TITLE','%');
   }
-  if(x>SCR_W-STATUS_CLK_W)
-    warn(`header room reading runs into the clock region (ends x=${x})`);
+  if(x>STATUS_ROOM_W)
+    warn(`header room reading runs into the tab strip (ends x=${x}, tab strip starts ${TAB_X0})`);
 }
 
 function draw(){
@@ -1074,29 +1083,29 @@ function draw(){
   const shiftLadder=checkShiftDistinct();
   g.fillStyle=C.BG; g.fillRect(0,0,SCR_W,SCR_H);
 
-  // header: tabs | room reading | clock, tiling the bar exactly
+  // header: room reading | tabs | clock, tiling the bar exactly
   // The cell is the clear rect in drawTab(), and handing it to wTab is what puts
   // the underline on the first row below the rule.
+  drawStatusRoom();
+
   for(let i=0;i<TAB_COUNT;i++){
     const cell=tabRect(i);
     wTab(cell.x,STATUS_DIV_Y+1,cell.w,STATUS_H-1,
          TAB_LABEL[i], i===page?'active':'inactive');
   }
 
-  drawStatusRoom();
-
   // 24h clock in Asia/Bangkok, matching the firmware's NTP + TZ_INFO="ICT-7".
-  // NUM now, same as the room reading beside it.
+  // NUM, same as the room reading on the other side.
   const clk=new Date().toLocaleTimeString('en-GB',
               {timeZone:'Asia/Bangkok',hour:'2-digit',minute:'2-digit'});
-  gtext('NUM',clk,SCR_W-SP_2+2,STATUS_CY,'right',C.TEXT);
-  const clkW=textW('NUM',clk), clkLeft=(SCR_W-SP_2+2)-clkW;
+  gtext('NUM',clk,SCR_W-STATUS_EDGE_DX,STATUS_CY,'right',C.TEXT);
+  const clkW=textW('NUM',clk), clkLeft=(SCR_W-STATUS_EDGE_DX)-clkW;
   if(clkLeft < SCR_W-STATUS_CLK_W)
-    warn(`clock "${clk}" (${clkW}px) starts at x=${clkLeft}, inside the room region (starts ${SCR_W-STATUS_CLK_W})`);
+    warn(`clock "${clk}" (${clkW}px) starts at x=${clkLeft}, inside the tab strip (starts ${TAB_X0+TAB_STRIP_W})`);
   // The live clock is always "HH:MM"-shaped, so check the pre-NTP placeholder too
   // — it is the one clock string the browser will never hand us.
-  if((SCR_W-SP_2+2)-textW('NUM','--:--') < SCR_W-STATUS_CLK_W)
-    warn(`clock placeholder "--:--" (${textW('NUM','--:--')}px) starts inside the room region`);
+  if((SCR_W-STATUS_EDGE_DX)-textW('NUM','--:--') < SCR_W-STATUS_CLK_W)
+    warn(`clock placeholder "--:--" (${textW('NUM','--:--')}px) starts inside the tab strip`);
   g.fillStyle=C.DIVIDER; g.fillRect(0,STATUS_DIV_Y,SCR_W,1);
 
   if(page===PAGE_SCENES)        drawScenes();
@@ -1120,12 +1129,9 @@ function draw(){
   }
 
   // ── the same static_asserts screen.cpp makes ──
-  // TAB_STRIP_W is DERIVED from STATUS_ROOM_W, STATUS_CLK_W and TAB_X0 (see its
-  // const above), so "tabs and the room/clock block do not meet" cannot go
-  // wrong, and the glyph/tab-strip seam that used to be asserted here is gone
-  // with the glyph itself (TAB_X0 is 0 now). tabRect() warns separately if the
-  // labels ever overrun TAB_STRIP_W — 45px of margin now, the old 19px plus the
-  // 26px the glyph freed.
+  // TAB_STRIP_W is DERIVED from STATUS_ROOM_W and STATUS_CLK_W (see its const
+  // above), so "room reading + tabs + clock = SCR_W" cannot go wrong. tabRect()
+  // warns separately if the labels ever overrun TAB_STRIP_W.
   // The banner must sit wholly inside the band it clears — the band is what
   // removes the content underneath, so anything hanging out of it would be drawn
   // over pixels nothing cleared, which is the fragment problem it exists to fix.
@@ -1196,13 +1202,20 @@ function draw(){
   // NUM digits, a TITLE "%", no "/" — with worst-case inputs rather than
   // whatever the current dev[3] shows.
   {
-    const roomW=textW('NUM','27')+5+SP_1+textW('NUM','99')+textW('TITLE','%');
-    if(roomW>STATUS_ROOM_W)
-      warn(`header room reading worst case (${roomW}px) exceeds its ${STATUS_ROOM_W}px budget`);
-    // The leftover is the deliberate gap before the clock now that the "/" is
-    // gone, so it must not reach zero the way the F_TITLE version's did.
-    if(STATUS_ROOM_W-roomW < SP_1)
-      warn(`header room reading leaves only ${STATUS_ROOM_W-roomW}px before the clock (want >= ${SP_1})`);
+    const roomW=roomReadingW('NUM',{s:'27',deg:true},'99');
+    if(STATUS_EDGE_DX+roomW>STATUS_ROOM_W)
+      warn(`header room reading worst case (${STATUS_EDGE_DX}+${roomW}px) exceeds its ${STATUS_ROOM_W}px region`);
+    // The gap to the first tab LABEL is what separates the two blocks now that
+    // the "/" is gone, and since the swap it is the tab strip's margin plus
+    // TAB_LBL_DX rather than slack inside this region — so measure that.
+    const toTabs=tabRect(0).x+TAB_LBL_DX-(STATUS_EDGE_DX+roomW);
+    if(toTabs < SP_1)
+      warn(`header room reading leaves only ${toTabs}px before "${TAB_LABEL[0]}" (want >= ${SP_1})`);
+    // The out-of-range fallback has to fit too, or it would spill into the tab
+    // strip — which repaints only on a tab change, so the spill would stay.
+    const fbW=roomReadingW('TITLE',{s:'-10',deg:true},'100');
+    if(STATUS_EDGE_DX+fbW>STATUS_ROOM_W)
+      warn(`header room reading TITLE fallback "-10/100" (${fbW}px) still overruns its region`);
   }
   // VERTICAL fit, which only became a question when these two regions went to
   // F_NUM: its box is 26px against F_TITLE's 16 in a 31px band, and ROLE_DY
@@ -1245,10 +1258,10 @@ function draw(){
   let out=`<span class="hd">page</span> ${TAB_LABEL[page]}   `+
           `<span class="hd">body</span> ${ROWS_Y0}..${ROWS_Y0+NUM_DEVICES*ROW_H-1}\n`;
   const tabCellsStr=TAB_LABEL.map((t,i)=>{const c=tabRect(i);return `${t}:${c.x}..${c.x+c.w-1}`;}).join(' ');
-  out+=`header  y ${STATUS_Y0}..${SCR_H-1} | tabs ${TAB_X0}..${TAB_X0+TAB_STRIP_W-1} [${tabCellsStr}] (${TAB_GAP}px gaps) | room ${SCR_W-STATUS_ROOM_W-STATUS_CLK_W}..${SCR_W-STATUS_CLK_W-1} | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
+  out+=`header  y ${STATUS_Y0}..${SCR_H-1} | room 0..${STATUS_ROOM_W-1} | tabs ${TAB_X0}..${TAB_X0+TAB_STRIP_W-1} [${tabCellsStr}] (${TAB_GAP}px gaps) | clock ${SCR_W-STATUS_CLK_W}..${SCR_W-1}\n`;
   {
-    const roomW=textW('NUM','27')+5+SP_1+textW('NUM','99')+textW('TITLE','%');
-    out+=`  NUM    room worst ${roomW}/${STATUS_ROOM_W} (${STATUS_ROOM_W-roomW}px gap before clock) | clock "23:45" ${textW('NUM','23:45')}/${STATUS_CLK_W} | ink y ${STATUS_CY+INK_TOP.NUM}..${STATUS_CY+INK_BOT.NUM} in ${STATUS_DIV_Y+1}..${SCR_H-1}\n`;
+    const roomW=STATUS_EDGE_DX+roomReadingW('NUM',{s:'27',deg:true},'99');
+    out+=`  NUM    room worst ${roomW}/${STATUS_ROOM_W} (${tabRect(0).x+TAB_LBL_DX-roomW}px gap before "${TAB_LABEL[0]}") | clock "23:45" ${textW('NUM','23:45')}/${STATUS_CLK_W} | ink y ${STATUS_CY+INK_TOP.NUM}..${STATUS_CY+INK_BOT.NUM} in ${STATUS_DIV_Y+1}..${SCR_H-1}\n`;
   }
   out+=`noconn  x ${NOCONN_X0}..${NOCONN_X0+NOCONN_W-1} | y ${NOCONN_Y0}..${NOCONN_Y0+NOCONN_H-1} in band ${rowTop(0)}..${rowTop(0)+ROW_H-1} | ${haOk?'hidden (haOk)':'SHOWN, band cleared'}\n`;
   out+=`card    x ${CARD_X}..${CARD_X+CARD_W-1}, content ${CARD_IN_X0}..${CARD_IN_X1} (${CARD_IN_W}px)\n`;
@@ -1384,6 +1397,7 @@ function hitDeviceRow(i,px){
 // without clicking back to it:
 //   ?page=0|1|2  &night=0|1|2  &scenes=24  &stale=1  &ha=0  &wifi=0  &bri=4  &vol=0
 //   &name=Bedside+reading+lamp  &mode=heat  &avail=0  &ct=0  &hum=60
+//   &room=-10  (with &hum=100, drives the header reading's TITLE fallback)
 const Q=new URLSearchParams(location.search);
 if(Q.has('scenes')) sceneStress(Math.max(0,+Q.get('scenes')-SCENE_BASE.length));
 if(Q.has('page'))   page=Math.max(0,Math.min(2,+Q.get('page')));
@@ -1403,6 +1417,7 @@ if(Q.has('mode'))   dev[3].mode=Q.get('mode');
 if(Q.has('avail'))  dev[1].avail=Q.get('avail')!=='0';
 if(Q.has('ct'))     dev[2].ct=Q.get('ct')!=='0';
 if(Q.has('hum'))     dev[3].humidity=Q.get('hum')==='-1'?null:+Q.get('hum');
+if(Q.has('room'))    dev[3].room=Q.get('room')==='-'?null:Math.round(+Q.get('room'));
 
 draw();
 setInterval(()=>{ if(!isErr()) draw(); },20000);   // keep the clock live

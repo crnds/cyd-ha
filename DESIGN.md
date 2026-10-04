@@ -462,17 +462,26 @@ Three regions that **tile the bar exactly**. A gap leaves pixels nothing ever
 clears; an overlap is just as bad, since each region only clears its own rect.
 
 ```
-171 + 80 + 69 = 320
-│     │    └── clock,  x 251..319   "23:45" 63px + 6px right margin, F_NUM
-│     └─────── room,   x 171..250   74px of content + 6px gap, F_NUM (+ small %)
-└───────────── tabs,   x   0..170   166px of content, flush left, 5px trailing
+80 + 171 + 69 = 320
+│    │     └── clock,  x 251..319   "23:45" 63px + 6px right margin, F_NUM
+│    └──────── tabs,   x  80..250   166px of content, CENTRED (2px / 3px margins)
+└───────────── room,   x   0.. 79   6px left margin + 74px of content, F_NUM (+ small %)
 divider at y=208; every region clears 31px tall, so the rule survives and is painted once
 ```
 
-`TAB_STRIP_W` is **derived** (`SCR_W - STATUS_ROOM_W - STATUS_CLK_W - TAB_X0`), so
-the tiling cannot fail to sum and there is nothing for a `static_assert` to catch.
-What can still go wrong — labels or readings outgrowing their region — is checked
-at runtime in `simulator.html`.
+The two numbers frame the bar from either edge, mirrored on one
+`STATUS_EDGE_DX` (6px), and the navigation sits between them. That order is a
+**swap, made on request**: it used to be tabs | room | clock, with the tabs
+flush left at x 0. No width changed, only the order.
+
+`TAB_X0` is `STATUS_ROOM_W` and `TAB_STRIP_W` is **derived**
+(`SCR_W - STATUS_ROOM_W - STATUS_CLK_W`), so the tiling cannot fail to sum and
+there is nothing for a `static_assert` to catch. What can still go wrong — labels
+or readings outgrowing their region — is checked at runtime in `simulator.html`.
+The room reading can't outgrow its region at all: a reading too wide for `F_NUM`
+(`"-10"`, `"100"`) drops its digits to `F_TITLE`, because a spill would land on the
+tab strip, which repaints only on a tab change. Before the swap it landed on the
+clock, which repaints every minute.
 
 The header is anchored to the **bottom** edge, not the top, and is 32px, up from
 22. The rows paid 2px each for that height, which buys the tab targets a third
@@ -646,9 +655,11 @@ the 6×8 GLCD font, a clock on the right.
   accurate* region of the panel.
 - ALL-CAPS 6px labels: shouty and hard to read at a glance.
 
-**After.** 32px, three regions tiling it exactly (171 + 80 + 69): flush-left
-content-fit sentence-case tab labels in `F_MICRO`, then the AC's room reading and
-the clock, both in `F_NUM`.
+**After.** 32px, three regions tiling it exactly (80 + 171 + 69): the AC's room
+reading at the left edge, content-fit sentence-case tab labels in `F_MICRO`
+centred between, and the clock at the right edge, both numbers in `F_NUM`. (The
+tabs were flush left at x 0 with the room reading beside the clock until a later
+swap, on request, put the numbers at either edge.)
 
 **The two number regions ended up the LOUDEST thing in the bar, and the tab
 labels the quietest** — which is the inverse of where this section started, and it
@@ -659,8 +670,8 @@ recovered space on them, and leaving the labels at the smallest face in the buil
 follows from that.
 
 Getting there took every pixel the header had spare: the deleted connectivity
-glyph's 26px, `TAB_GAP` cut twice (18 → 12 → 8), and the tab strip going flush
-left. There is no size between Font 2 and Font 4, so the bump cost **1.8× the
+glyph's 26px, `TAB_GAP` cut twice (18 → 12 → 8), and the tab strip giving up
+its outer margins. There is no size between Font 2 and Font 4, so the bump cost **1.8× the
 width** — `"23:45"` 35px → 63px — and even then the `%` had to stay a size down
 (21px → 9px) for the pair to fit at all.
 

@@ -273,143 +273,114 @@
 // is worse at ANY bezel than in the middle — so relocating it costs nothing and
 // needs no recalibration.
 //
-// THREE regions that TILE THE BAR EXACTLY (171 + 80 + 69 = 320). A gap leaves
-// pixels nothing ever clears; an overlap is just as bad, since each region only
-// clears its own rect, so whatever spills over is never repainted. There used
-// to be a fourth, a 26px connectivity glyph at x 0..25 (STATUS_ICO_W), and the
-// tab strip started after it at TAB_X0 26. That glyph is gone — removed on
-// request once the header moved to the bottom edge and it became a
-// bottom-left-corner ornament — and its job is now done by an overlay banner
-// in the BODY that only appears when there is something to say (NOCONN_W
-// below, drawNoConn() in screen.cpp). TAB_X0 is 0 as a result.
+// THREE regions that TILE THE BAR EXACTLY (80 + 171 + 69 = 320):
+//   room reading  x   0.. 79   STATUS_ROOM_W, left edge
+//   tab strip     x  80..250   TAB_STRIP_W, the tabs CENTRED in it
+//   clock         x 251..319   STATUS_CLK_W, right edge
+// A gap leaves pixels nothing ever clears; an overlap is just as bad, since each
+// region only clears its own rect, so whatever spills over is never repainted.
 //
-// The 26px that glyph freed did NOT stay with the tabs. It landed in
-// TAB_STRIP_W's derived width as slack, and has since been spent — along with
-// another 8px from TAB_GAP — on making the room reading and the clock a size
-// bigger (F_NUM). So the split now is: tabs 171 (166 of content), room 80,
-// clock 69. See STATUS_ROOM_W for the arithmetic and why F_NUM was the only step
-// available.
+// ROOM | TABS | CLOCK IS A SWAP, made on request. It used to be tabs | room |
+// clock, with the strip flush left at x 0 and the room reading sandwiched
+// between it and the clock. Now the two numbers frame the bar from either edge
+// and the navigation sits between them, which is where a tab bar is looked for.
+// The widths did not change, only the order — so none of the F_NUM budgets
+// below moved, and neither did any tap target's size.
 //
-// The leading "171" (TAB_STRIP_W) is the space the 3 tabs lay out in, but it is
-// NOT 3 equal cells any more. A first attempt at a visible gap tried exactly
-// that — 3 uniform cells narrower than before, plus a small fixed gap between
-// them — and it did not work: with a wide UNIFORM cell, the label is centred
-// in it, so most of the "gap" a viewer sees either side of a short word like
-// "Scenes" is really slack INSIDE that word's own cell, not the explicit gap
-// between cells. Shrinking the cell only a little and adding a few px of real
-// gap barely moved the total, because the widest label ("Settings") still set
-// the uniform cell width every other tab had to share.
+// There used to be a fourth region, a 26px connectivity glyph at x 0..25
+// (STATUS_ICO_W). It is gone — removed on request once the header moved to the
+// bottom edge — and its job is done by an overlay banner in the BODY that only
+// appears when there is something to say (NOCONN_W below, drawNoConn() in
+// screen.cpp). The 26px it freed, along with another 8px from TAB_GAP, was
+// spent on making the room reading and the clock a size bigger (F_NUM).
 //
-// So tab cells are now sized to their OWN label — measured via textW(F_MICRO,
-// ...), not a shared constant — with TAB_LBL_DX blank each side and a real
-// TAB_GAP between tabs. That removes the per-cell slack a short word used to
-// carry. The strip is FLUSH LEFT at TAB_X0, so whatever's left of TAB_STRIP_W
-// after 3 content-fit cells + 2 gaps collects as ONE margin on the right,
-// before the room reading, rather than being distributed between words — which
-// is what actually reads as "tabs sitting close together" instead of "tabs
-// spread across the header". See tabRect() in screen.cpp, which computes and
-// caches the 3 cells once; simulator.html's draw() does the equivalent
-// inline. The gaps AND that right margin are all static background — nothing is
-// ever drawn or hit-tested there, so, like the header rule sitting outside
-// every region's clear rect, they only need painting once on a full invalidate,
-// never per-frame.
+// Tab cells are sized to their OWN label — measured via textW(F_MICRO, ...),
+// not a shared constant — with TAB_LBL_DX blank each side and a real TAB_GAP
+// between tabs. A uniform cell does not work: the widest label sets the width
+// every other tab shares, so most of the "gap" a viewer sees beside a short
+// word is slack inside its own cell. See tabRect() in screen.cpp, which
+// computes and caches the 3 cells once; simulator.html's tabRect() mirrors it.
 //
-// FLUSH LEFT IS A CHANGE, made on request. The strip used to be CENTRED in
-// TAB_STRIP_W, with the leftover split evenly into two outer margins, and that
-// was right while TAB_X0 was 26: the left "margin" was the gap to the
-// connectivity glyph sitting beside the tabs, not empty screen. Deleting that
-// glyph (see above) turned the same arithmetic into ~22px of blank
-// bottom-left corner with nothing on the far side of it, so the tabs read as
-// adrift instead of anchored. Now only "Devices"' own TAB_LBL_DX separates it
-// from the screen edge.
+// THE STRIP IS CENTRED in TAB_STRIP_W, the leftover split into two outer
+// margins. It was flush left before the swap, because centred at x 0 the left
+// margin was blank bottom-left corner with nothing beyond it, and the tabs read
+// as adrift. Sitting between two blocks of digits, both margins are now gaps
+// to a neighbour, so centring is what balances them. The gaps AND the margins
+// are static background — nothing is ever drawn or hit-tested there, so they
+// are painted once on a full invalidate, never per-frame.
 //
-// TAB_GAP HAS NOW BEEN CUT TWICE FOR THE SAME REASON, and both times the buyer
-// was the room reading's font: 18 -> 12 to get its numbers from F_MICRO up to
-// F_TITLE, then 12 -> 8 to get them (and the clock) up to F_NUM. See
-// STATUS_ROOM_W. Both steps stayed on the SP_* scale (SP_3, then SP_2), and both
-// spent tab-strip slack rather than tab-strip content: the 3 cells are
-// content-fit, so a smaller gap moves them closer together without shrinking any
-// of them. The visible space between two tab words is TAB_LBL_DX + TAB_GAP +
-// TAB_LBL_DX, so it went 20px -> 16px, not 12px -> 8px.
+// TAB_GAP HAS BEEN CUT TWICE FOR THE SAME REASON, and both times the buyer was
+// the room reading's font: 18 -> 12 to get its numbers from F_MICRO up to
+// F_TITLE, then 12 -> 8 to get them (and the clock) up to F_NUM. Both spent
+// tab-strip slack rather than content: the cells are content-fit, so a smaller
+// gap moves them closer together without shrinking any of them.
 //
 // The 3 shipped labels need 166px (cells 50/44/56 + 2*TAB_GAP) of TAB_STRIP_W's
-// 171, leaving a 5px gap before the room reading. That margin is a lot tighter
-// than the 45px this strip briefly had, and deliberately so — that 45px was
-// never granted to the tabs on purpose. It accumulated: first from correcting
-// STATUS_ROOM_W's humidity budget from "100%" to "99%", then from the 26px the
-// deleted connectivity glyph freed. Both were slack TAB_STRIP_W's formula picked
-// up, which is exactly why handing it to the two number regions costs the tabs
-// nothing they were using. If TAB_LABEL ever grows a wider word there is now
-// very little room to absorb it — simulator.html's warning on this arithmetic is
-// the thing to watch, and it is no longer a theoretical one.
+// 171, leaving 5px: 2px before "Devices", 3px after "Settings". If TAB_LABEL
+// ever grows a wider word there is very little room to absorb it —
+// simulator.html's warning on this arithmetic is the thing to watch.
 #define STATUS_H       32
 #define STATUS_Y0      (SCR_H - STATUS_H) // 208 — top edge of the header band
-#define TAB_X0         0                  // was 26, behind the deleted glyph
 #define TAB_GAP        SP_2                // real gap between tabs — was 18, then 12
 #define TAB_COUNT      3                  // static_assert'd against PAGE_COUNT
+// Blank between the screen edge and each number block — the clock's right
+// margin and, mirrored, the room reading's left one. One constant, so the bar
+// stays symmetric if either changes. Before the swap only the clock used it;
+// the room reading started at x 0 and its digits touched the bezel.
+#define STATUS_EDGE_DX 6
 // The clock's own sub-region. Unchanged in role, and now on its THIRD width: 51
 // originally (~10px of unused slack), cut to 41 to buy the AC's room reading its
 // own space when that moved in beside it, and now 69 because the clock itself
 // went up a size to F_NUM.
 //
 // The clock is still exactly 5 characters. In F_NUM "23:45" is 63px (digits are
-// 14px apiece, ":" is 7) against F_TITLE's 35px, and it is still right-aligned
-// SP_2-2 (6px) off the screen edge — 63 + 6 = 69, with zero pixels of left
-// slack, exactly as tight as the 41px version was. "--:--" is 39px (F_NUM "-"
-// is 8), so the pre-NTP placeholder is comfortably narrower, as it always was.
+// 14px apiece, ":" is 7) against F_TITLE's 35px, right-aligned STATUS_EDGE_DX
+// off the screen edge — 63 + 6 = 69, with zero pixels of left slack. Anything
+// wider paints into the tab strip, which only repaints on its own compare.
+// "--:--" is 39px (F_NUM "-" is 8), so the pre-NTP placeholder is comfortably
+// narrower, as it always was.
 #define STATUS_CLK_W   69                 // x 251..319 — 24h clock
 // The AC's live room reading, relocated here from its own card (see the AC
-// card comment above BULB_ID_W) on request, so it reads on every page rather
-// than only Devices. drawStatusRoom() (screen.cpp) draws it by reusing
-// roomTempText()/humidityText() — the same two functions the card used to
-// call — left-aligned as: <temp><ring> <humidity>%, immediately before the
-// clock region.
+// card comment above BULB_ID_W) on request so it reads on every page rather
+// than only Devices, and since moved to the LEFT edge by the swap above.
+// drawStatusRoom() (screen.cpp) draws it by reusing roomTempText()/
+// humidityText() — the same two functions the card used to call — as
+// <temp><ring> <humidity>%, left-aligned STATUS_EDGE_DX in from the edge.
 //
-// ITS NUMBERS ARE F_NUM NOW. This region has been up a size twice: F_MICRO ->
-// F_TITLE to stop it looking undersized beside the clock, and now F_TITLE ->
-// F_NUM together WITH the clock, on request, to spend the space the deleted
-// connectivity glyph and a TAB_GAP cut freed. Both times TAB_GAP paid.
-//
-// THERE IS NO SIZE BETWEEN F_TITLE AND F_NUM — TFT_eSPI has no Font 3 or Font 5
-// (their fontdata[] slots are null placeholders) and this build loads only GLCD,
-// Font 2 and Font 4. So "one size up" is 10px caps -> 18px caps and 1.8x the
-// width, not a nudge; there was no gentler option to pick.
+// ITS NUMBERS ARE F_NUM. This region has been up a size twice: F_MICRO ->
+// F_TITLE to stop it looking undersized beside the clock, then F_TITLE -> F_NUM
+// together WITH the clock. There is no size between F_TITLE and F_NUM —
+// TFT_eSPI has no Font 3 or Font 5 — so "one size up" is 10px caps -> 18px caps
+// and 1.8x the width, not a nudge.
 //
 // TWO PIECES DELIBERATELY DID NOT GROW WITH THE DIGITS:
-//   * "%" stays F_TITLE. At F_NUM it is 21px against F_TITLE's 9 — 12px this
-//     region does not have, and the pair would not have fitted at all. It is a
-//     unit marker rather than data, the same argument that kept "/" quiet, and
-//     it is drawn BASELINE-ALIGNED to the big digits (see drawStatusRoom()) so
-//     it reads as a suffix rather than as a smaller number.
-//   * The degree ring stays a 2px drawn circle with a 5px advance. wValue()
-//     already draws exactly that ring beside F_NUM digits for the AC setpoint,
-//     so matching it is the consistent choice; scaling the ring with the font
-//     would make the header's ring disagree with the setpoint's.
-// THE TRAILING "/" IS GONE. At F_MICRO beside 18px digits it read as vestigial,
-// and now that the clock is the same size as these digits, 6px of air separates
-// the two blocks better than a tiny glyph did.
+//   * "%" stays F_TITLE. At F_NUM it is 21px against 9 — width this region does
+//     not have. It is a unit marker rather than data, and is drawn
+//     BASELINE-ALIGNED to the big digits so it reads as a suffix rather than as
+//     a smaller number.
+//   * The degree ring stays a 2px drawn circle with a 5px advance, matching the
+//     one wValue() draws beside the AC setpoint's F_NUM digits.
+// The trailing "/" that used to separate it from the clock is gone too.
 //
-// Still sized for the worst REALISTIC case, not the worst POSSIBLE one, on both
-// numbers — an indoor Sensibo sensor in an air-conditioned bedroom does not read
-// 100% relative humidity any more than it reads a -10C temperature:
-//   "27"(28) + ring(5) + gap(4) + "99"(28) + "%"(9, F_TITLE) = 74, of 80
-// The 6px left over is NOT incidental slack any more, which is a change from the
-// F_TITLE version's "zero leftover": it is the deliberate gap before the clock,
-// doing the job the deleted "/" used to do. Don't spend it.
+// Sized for the worst REALISTIC case, not the worst POSSIBLE one — an indoor
+// sensor in an air-conditioned bedroom does not read 100% RH any more than it
+// reads -10C:
+//   6 (STATUS_EDGE_DX) + "27"(28) + ring(5) + gap(4) + "99"(28) + "%"(9) = 80
+// ZERO slack inside the region, and that is fine now where it was not before
+// the swap: the gap to the next block is no longer this region's job. The tab
+// strip's own 2px margin plus "Devices"' TAB_LBL_DX put 6px between "%" and the
+// first tab label, the same air the clock gets from "Settings".
 //
-// A genuinely out-of-range reading on EITHER number (ha.cpp's temperature sanity
-// band is a broad -10..60C; humidity has no such check today, so a stuck sensor
-// could in principle report 100) draws PAST the region's right edge into the
-// clock's territory — content grows rightward from a fixed left edge, so
-// overflow spills toward the clock, not back toward the tabs. That costs more
-// than it used to: a 3-digit "-10" is 14px wider at F_NUM than at F_TITLE.
-// Still accepted, and still self-healing for the same reason — drawStatusRoom()'s
-// clear covers only STATUS_ROOM_W, so a stray pixel sits past it until the
-// clock's next per-minute repaint clears that whole region: worst case a
-// 59-second-old artifact, never a permanently wrong reading.
-
-#define STATUS_ROOM_W  80                 // x 171..250 — AC room temp + humidity
-#define TAB_STRIP_W    (SCR_W - STATUS_ROOM_W - STATUS_CLK_W - TAB_X0) // 171
+// AN OUT-OF-RANGE READING DROPS ITS DIGITS TO F_TITLE rather than spilling
+// (ha.cpp's temperature band is a broad -10..60C, and humidity has no check, so
+// "-10" or "100" can arrive). Before the swap a spill ran into the clock, which
+// repaints every minute and so healed it. Now it would run into the tab strip,
+// which repaints only when a tab's vis changes, so the stray pixels would stay
+// for as long as you stayed on the page. A smaller reading for a reading that
+// is already wrong is the cheaper failure.
+#define STATUS_ROOM_W  80                 // x 0..79 — AC room temp + humidity
+#define TAB_X0         STATUS_ROOM_W      // 80 — tab strip starts after it
+#define TAB_STRIP_W    (SCR_W - STATUS_ROOM_W - STATUS_CLK_W) // 171
 // The divider is now at the TOP of the header band — the seam with the body
 // above it — rather than the bottom, because the header sits below the body
 // instead of above it. Content sits BELOW the divider (mirrored from the old

@@ -177,9 +177,11 @@ Three things about it are load-bearing, not conveniences:
   (the AC's live temperature/humidity, relocated there from its card — see
   `STATUS_ROOM_W`): that the worst *realistic* string (`"27"` + ring +
   `"99"` + a small `"%"` — not `"100"`, which an indoor bedroom sensor doesn't
-  read) still fits the region's reserved budget and still leaves the deliberate
-  gap before the clock, the same kind of check the AC's identity column needed
-  before the reading moved; that the clock fits its own region in `F_NUM`,
+  read) still fits the region's reserved budget after its `STATUS_EDGE_DX` inset,
+  that it still leaves a gap before the first tab label, and that the `F_TITLE`
+  fallback for an out-of-range reading (`"-10"`/`"100"`) fits too — the same
+  kind of check the AC's identity column needed before the reading moved
+  (`?room=-10&hum=100` drives the fallback); that the clock fits its own region in `F_NUM`,
   **including the `"--:--"` placeholder the browser's live clock never
   produces**; and that `F_NUM`'s ink envelope stays inside the header band at
   all, which only became a question when these regions went up a size. On the
@@ -677,18 +679,36 @@ that neither of those two checks reaches.
 
 **Rendering** (`src/ui/screen.cpp`) is **dirty-region based**. `screenRender()`
 runs every loop pass, dispatches on `S.page`, and repaints only what changed:
-- The **header** is three independent regions (tabs / room reading / clock) that
+- The **header** is three independent regions (room reading / tabs / clock) that
   **tile it exactly** — the tiling is enforced by construction (`TAB_STRIP_W` is
-  *derived* from the other two plus `TAB_X0`, so there is nothing left for a
-  `static_assert` to catch), because a gap leaves pixels nothing ever clears and
-  an overlap is just as bad, since each region only clears its own rect. There
-  used to be a fourth, a 26px connectivity glyph at x 0..25, and `TAB_X0` began
-  after it at 26; it is gone (see the connectivity banner below) and `TAB_X0` is
-  0. The split is now **171 + 80 + 69 = 320**: the glyph's 26px did *not* stay
-  with the tabs, it landed in `TAB_STRIP_W`'s derived width as slack and has since
-  been spent — with another 8px from `TAB_GAP` — on making the two number regions
-  a size bigger. The tabs are flush left and use 166px of their 171, leaving 5px
-  before the room reading.
+  *derived* from the other two, and `TAB_X0` *is* `STATUS_ROOM_W`, so there is
+  nothing left for a `static_assert` to catch), because a gap leaves pixels
+  nothing ever clears and an overlap is just as bad, since each region only
+  clears its own rect. The split is **80 + 171 + 69 = 320**.
+
+  **Room | tabs | clock is a swap, made on request.** It used to be tabs | room
+  | clock, the strip flush left at x 0 and the room reading wedged between it
+  and the clock. Now the two numbers frame the bar from either edge and the
+  navigation sits between them. Only the order changed — no width did, so no
+  `F_NUM` budget and no tap target moved in size. Three things followed from it:
+  - **The tabs are centred in their strip again** (166px of content in 171: 2px
+    before "Devices", 3px after "Settings"). They were flush left only because,
+    centred against the screen edge, the left margin was blank corner with
+    nothing beyond it; between two blocks of digits both margins are gaps to a
+    neighbour.
+  - **`STATUS_EDGE_DX` (6) insets both number blocks from the edge** — the
+    clock's right margin and, mirrored, the room reading's left one. At x 0 the
+    room digits touched the bezel.
+  - **The room reading must never draw past its region, and drops its digits to
+    `F_TITLE` rather than spill.** Its right-hand neighbour used to be the
+    clock, which repaints every minute and so healed a spill. It is now the tab
+    strip, which repaints only when a tab's vis changes, so a spill would stay
+    on the glass for as long as that page did.
+
+  There used to be a fourth region, a 26px connectivity glyph at x 0..25; it is
+  gone (see the connectivity banner below). Its 26px landed in `TAB_STRIP_W`'s
+  derived width as slack and has since been spent — with another 8px from
+  `TAB_GAP` — on making the two number regions a size bigger.
 
   **Both number regions are `F_NUM` now**, up a size on request. That is a
   1.8× width jump, not a nudge (see the ladder-hole note above), and it is the
@@ -702,9 +722,10 @@ runs every loop pass, dispatches on `S.page`, and repaints only what changed:
     draws exactly that ring beside the AC setpoint's `F_NUM` digits, so scaling
     this one with the font would make the two disagree.
   - **The trailing `/` is gone.** At `F_MICRO` beside 18px digits it read as
-    vestigial, and the 6px `STATUS_ROOM_W` leaves over now does the separating.
-    That 6px is **deliberate**, which reverses the old "zero leftover" note — it is
-    the gap before the clock, not slack, so don't spend it.
+    vestigial. Since the swap, the 6px that does the separating is the tab
+    strip's 2px margin plus "Devices"' `TAB_LBL_DX`, not slack inside
+    `STATUS_ROOM_W`: the worst realistic reading fills the region exactly
+    (6 inset + 74 = 80), and that is fine.
 
   The room region repaints on its own compare (room string, humidity string,
   resolved colour), independently of the tabs and the clock, the same "compare by
@@ -712,11 +733,11 @@ runs every loop pass, dispatches on `S.page`, and repaints only what changed:
   still 2 digits, not 3 (`"100%"`) — an indoor, air-conditioned bedroom sensor
   doesn't read 100% relative humidity, the same realistic-vs-possible judgement
   the temperature side (2 digits, not `ha.cpp`'s full -10..60C band) already made.
-  A reading that *does* exceed it spills right, into the clock, and costs more
-  than it used to: `"100"` is 14px wider at `F_NUM` than at `F_TITLE`. Still
-  accepted, and still self-healing — `drawStatusRoom()` clears only its own rect,
-  so a stray pixel sits there until the clock's next per-minute repaint clears
-  that whole region. Worst case a 59-second-old artifact.
+  A reading that *does* exceed it (`"-10"`, `"100"`) is drawn with its digits
+  in `F_TITLE`, which fits the worst possible case with room to spare. It used
+  to spill right into the clock and heal on the next minute; with the tab strip
+  as the neighbour nothing would heal it. The role is chosen from the strings
+  themselves, so the region's existing string compare already covers it.
 
   The clock repaints once a minute, which is invisible. It replaced a
   freshness readout that counted seconds since `haOkMs` — and since every poll
@@ -726,9 +747,10 @@ runs every loop pass, dispatches on `S.page`, and repaints only what changed:
   staleness to the card dimming, not to this readout. **The clock is exactly 5
   characters** — `"23:45"` is 63px in `F_NUM` against the 69px this region now
   leaves (it was 35px of 41 at `F_TITLE`, and 51px before the room reading arrived
-  beside it), so anything wider spills into the room region, which only repaints
+  beside it), so anything wider spills into the tab strip, which only repaints
   on its own compare, making *that* overflow permanent. The margins are what they
-  always were: a 6px right margin and **zero px of left slack**. `"--:--"` is
+  always were: a 6px right margin (`STATUS_EDGE_DX`) and **zero px of left
+  slack**. `"--:--"` is
   39px, comfortably narrower, as it has always been.
 
   **Vertical fit stopped being free when these went to `F_NUM`** and is worth
@@ -1199,9 +1221,10 @@ Two more rendering details worth keeping:
 
 **Layout** lives entirely in the LAYOUT block of `include/config.h`. Rows are
 `ROWS_Y0 + i*ROW_H`; **0 + 4 × 52 = 208 exactly = `STATUS_Y0`**, and that one IS
-`static_assert`ed in `screen.cpp`. The header tiles as **219 + 60 + 41 = 320
-exactly** in x, but has no assert and needs none: `TAB_STRIP_W` is *derived* as
-`SCR_W - STATUS_ROOM_W - STATUS_CLK_W - TAB_X0`, so it cannot fail to sum.
+`static_assert`ed in `screen.cpp`. The header tiles as **80 + 171 + 69 = 320
+exactly** in x (room / tabs / clock), but has no assert and needs none:
+`TAB_X0` is `STATUS_ROOM_W` and `TAB_STRIP_W` is *derived* as
+`SCR_W - STATUS_ROOM_W - STATUS_CLK_W`, so it cannot fail to sum.
 Change those `#define`s together, not the arithmetic in `screen.cpp`.
 
 **The header is anchored to the BOTTOM edge (y 208..239), not the top — moved

@@ -13,7 +13,7 @@
 //   y 104..155   row band 2   card at y 106..153
 //   y 156..207   row band 3   card at y 158..205
 //   y    208     divider
-//   y 209..239   header   Devices  Scenes  Settings | 27 55% / 23:45
+//   y 209..239   header   27 55% | Devices  Scenes  Settings | 23:45
 //
 // The header is anchored to the BOTTOM edge, not the top — moved there on
 // request, not discovered there. Every constant that used to be measured from
@@ -53,15 +53,12 @@
 // A gap leaves pixels nothing ever clears; an overlap is just as bad, because
 // each region only clears its own rect, so whatever spills over is never
 // repainted.
-// There is nothing left here for a static_assert to catch. The bar is three
-// regions now — the 26px connectivity glyph that used to sit at x 0..25 is
-// gone (its job moved to drawNoConn()'s body overlay), so TAB_X0 is 0 and the
-// strip starts at the screen edge; and TAB_STRIP_W (config.h) is DERIVED from
-// STATUS_ROOM_W, STATUS_CLK_W and TAB_X0 rather than being an independent
-// constant, so "tabs and the room/clock block do not meet" cannot go wrong at
-// compile time either. What tabRect() below can still get wrong (labels too
-// wide for TAB_STRIP_W, margin going negative) is a runtime concern; see its
-// comment.
+// The bar is three regions now — room reading (x 0..79), tab strip
+// (x 80..250, centred), and clock (x 251..319). TAB_STRIP_W (config.h) is
+// DERIVED from STATUS_ROOM_W and STATUS_CLK_W, so "tabs and the adjacent
+// regions do not meet" cannot go wrong at compile time. What tabRect() below
+// can still get wrong (labels too wide for TAB_STRIP_W, margin going negative)
+// is a runtime concern; see its comment.
 // The indicator must sit INSIDE the band a tab clears (STATUS_DIV_Y+1..SCR_H-1),
 // or a tab that stops being current keeps its underline forever; one row higher
 // and it would overwrite the rule, which is painted once and never restored.
@@ -210,7 +207,7 @@ static const char* const TAB_LABEL[TAB_COUNT] = {"Devices", "Scenes", "Settings"
 // Each snapshot also needs its own `valid` flag on top, because BV_INACTIVE is 0
 // and a memset alone reads as "already drawn as inactive".
 
-// Split into independently-dirty regions (tabs | room reading | clock) so a
+// Split into independently-dirty regions (room reading | tabs | clock) so a
 // change in one never repaints the others. Repainting the full bar for a
 // one-character change is what made it visibly flash.
 //
@@ -321,30 +318,31 @@ static void humidityText(const DeviceState& d, char* out, size_t n) {
 // the TAB_STRIP_W comment in config.h). Computed once and cached: TAB_LABEL
 // never changes at runtime, so there is nothing to invalidate.
 //
-// THE STRIP IS FLUSH LEFT, at TAB_X0 (0), and all the leftover TAB_STRIP_W
-// collects as one margin on the RIGHT, before the room reading. It used to be
-// centred, with the leftover split evenly as two outer margins — which was the
-// right call when TAB_X0 was 26 and the left "margin" was really the gap to the
-// connectivity glyph beside it. Deleting that glyph turned the same arithmetic
-// into ~22px of blank screen in the bottom-left corner with nothing on the far
-// side of it, so the tabs read as adrift rather than as a group; flush left on
-// request. Only the first label's own TAB_LBL_DX now sits between "Devices" and
-// the screen edge, which is what makes the strip look anchored.
+// THE STRIP IS CENTRED in TAB_STRIP_W, which starts at TAB_X0 (80, right after
+// the room reading), with the leftover split into two outer margins. It was
+// flush left at x 0 before the room reading and the tabs swapped places: centred
+// against the screen edge, the left margin was blank corner with nothing beyond
+// it and the tabs read as adrift. Between two blocks of digits both margins are
+// gaps to a neighbour, so centring is what balances them.
 //
 // A future-proofing note rather than a live bug: if TAB_LABEL ever grew wide
-// enough that 3 cells + 2*TAB_GAP exceeded TAB_STRIP_W, the last cell would run
-// into the room reading. The 3 shipped labels leave 45px to spare (19px before
-// the glyph's 26px was freed), so this is deliberately not runtime-guarded —
-// simulator.html's draw() warns on the same arithmetic, which is where a future
-// label or font change would be caught.
+// enough that 3 cells + 2*TAB_GAP exceeded TAB_STRIP_W, the margin would go
+// negative and the cells would run into BOTH neighbours. The 3 shipped labels
+// leave 5px to spare, so this is deliberately not runtime-guarded —
+// simulator.html's tabRect() warns on the same arithmetic.
 static void tabRect(uint8_t i, int16_t& x, int16_t& w) {
   static int16_t cellX[TAB_COUNT];
   static int16_t cellW[TAB_COUNT];
   static bool ready = false;
   if (!ready) {
-    int16_t cx = TAB_X0;
+    int16_t total = 0;
     for (uint8_t k = 0; k < TAB_COUNT; k++) {
       cellW[k] = textW(F_MICRO, TAB_LABEL[k]) + 2 * TAB_LBL_DX;
+      total += cellW[k];
+    }
+    total += (TAB_COUNT - 1) * TAB_GAP;
+    int16_t cx = TAB_X0 + (TAB_STRIP_W - total) / 2;
+    for (uint8_t k = 0; k < TAB_COUNT; k++) {
       cellX[k] = cx;
       cx += cellW[k] + TAB_GAP;
     }
@@ -372,28 +370,30 @@ static void drawTab(uint8_t i, const char* label, uint8_t vis) {
   wTab(x, STATUS_DIV_Y + 1, w, STATUS_H - 1, label, vis);
 }
 
-// The AC's room reading, relocated here from its own card (see the "room
-// reading" comment above roomTempText()) so it reads on every page rather
-// than only Devices. `S.dev[NUM_BULBS]` is the AC by construction (config.h:
+// The AC's room reading, at the LEFT edge of the header (x 0..79). Relocated
+// here from its own card (see the "room reading" comment above roomTempText())
+// so it reads on every page rather than only Devices, then swapped with the tab
+// strip on request. `S.dev[NUM_BULBS]` is the AC by construction (config.h:
 // "Devices 0..2 are the bulbs, device 3 is the AC") — same assumption main.cpp
 // already makes when it wires up ENT_AC at that index, so this is not a new
 // coupling, just a second place that relies on it.
 //
-// Drawn as <temp><ring> <humidity>%, left-aligned from the region's left edge
-// (SCR_W - STATUS_ROOM_W - STATUS_CLK_W), immediately before the clock's own
-// region.
+// Drawn as <temp><ring> <humidity>%, left-aligned STATUS_EDGE_DX in from the
+// screen edge — the mirror of the clock's right margin.
 //
 // THE NUMBERS ARE F_NUM, THE "%" IS NOT, and that split is the whole reason this
 // fits — see STATUS_ROOM_W in config.h. F_NUM's "%" is 21px against F_TITLE's 9,
-// which this region does not have and never would; the sign is a unit marker
-// rather than data, so it stays a size down, the same argument that used to keep
-// the "/" separator quiet. That "/" is gone: with the clock now the same size as
-// these digits, the 6px of air STATUS_ROOM_W leaves does the separating better
-// than a tiny glyph beside 18px numbers did.
+// which this region does not have and never would.
+//
+// IT NEVER DRAWS PAST ITS OWN REGION. Its right-hand neighbour is the tab strip
+// now, which repaints only when a tab's vis changes — so unlike the clock it
+// used to spill into, nothing would ever clean up after it. A reading too wide
+// for the budget ("-10", "100") drops its digits to F_TITLE instead, the same
+// try-the-role-then-step-down idea as textFit(). The choice is derived from the
+// strings, so the existing string compare already covers it.
 //
 // Humidity is skipped entirely when there is nothing to show (humidityText()
-// returns ""), digits and sign together — there is no longer a trailing mark
-// whose position could jump when it appears.
+// returns ""), digits and sign together.
 static void drawStatusRoom(bool force) {
   DeviceState& d   = S.dev[NUM_BULBS];
   const uint32_t now = millis();
@@ -420,35 +420,44 @@ static void drawStatusRoom(bool force) {
       strcmp(hum, statusSnap.humStr) == 0 && fg == statusSnap.roomFg)
     return;
 
-  const int16_t x0 = SCR_W - STATUS_ROOM_W - STATUS_CLK_W;
-  clearHeaderRegion(x0, STATUS_ROOM_W);
+  clearHeaderRegion(0, STATUS_ROOM_W);
+
+  // Width of the whole reading with its digits in `role`: the same sequence of
+  // advances the draw below steps through.
+  auto readingW = [&](FontRole role) -> int16_t {
+    int16_t w = textW(role, room) + (degree ? 5 : 0) + SP_1;
+    if (hum[0]) w += textW(role, hum) + textW(F_TITLE, "%");
+    return w;
+  };
+  const FontRole role =
+      readingW(F_NUM) <= STATUS_ROOM_W - STATUS_EDGE_DX ? F_NUM : F_TITLE;
 
   // The small "%" sits on the BIG digits' baseline, not on their centre line:
   // F_NUM's baseline is cy+10 and F_TITLE's is cy+5, so shifting its datum down
   // by the difference lands the two on the same row. Centred instead, it would
   // float in the middle of the tall digits and read as a smaller number beside
-  // them rather than as their unit.
-  const int16_t pctCy = STATUS_CY + (fontBaseline(F_NUM) - fontBaseline(F_TITLE));
+  // them rather than as their unit. (In the F_TITLE fallback the difference is
+  // 0, and both sit on the same centre line, as they should.)
+  const int16_t pctCy = STATUS_CY + (fontBaseline(role) - fontBaseline(F_TITLE));
 
-  int16_t x = x0;
-  textAt(F_NUM, room, x, STATUS_CY, ML_DATUM, fg);
-  x += textW(F_NUM, room);
+  int16_t x = STATUS_EDGE_DX;
+  textAt(role, room, x, STATUS_CY, ML_DATUM, fg);
+  x += textW(role, room);
   if (degree) {
     // Same idiom as the AC setpoint: ring rides the digit tops, fontInkTop()
     // locates them, a small fixed gap clears them. Ring right edge is x+5 (3px
     // gap + 2px radius) and STAYS a 2px radius at F_NUM — wValue() draws exactly
     // this ring beside the setpoint's F_NUM digits, so growing it here would make
-    // the two disagree. Only fontInkTop()'s role argument tracks the digits, and
-    // it has now moved MICRO -> TITLE -> NUM with them.
+    // the two disagree. Only fontInkTop()'s role argument tracks the digits.
     const int16_t rcx = x + 3;
-    const int16_t rcy = STATUS_CY + fontInkTop(F_NUM) + 2;
+    const int16_t rcy = STATUS_CY + fontInkTop(role) + 2;
     tft.drawCircle(rcx, rcy, 2, fg);
     x += 5;
   }
   x += SP_1;
   if (hum[0]) {
-    textAt(F_NUM, hum, x, STATUS_CY, ML_DATUM, fg);
-    x += textW(F_NUM, hum);
+    textAt(role, hum, x, STATUS_CY, ML_DATUM, fg);
+    x += textW(role, hum);
     textAt(F_TITLE, "%", x, pctCy, ML_DATUM, fg);
   }
 
@@ -500,19 +509,17 @@ static void drawStatus(bool force) {
   // card dimming, not here.
   //
   // The clock is always exactly 5 characters, and it is F_NUM now — up a size
-  // on request, together with the room reading beside it, spending the space the
-  // deleted connectivity glyph and a TAB_GAP cut freed (see STATUS_CLK_W in
-  // config.h). "23:45" is 63px against F_TITLE's 35, and the region grew 41 -> 69
-  // to hold it, so the margins are what they always were: 6px on the right, ZERO
-  // px of left slack. Anything wider paints into the room region, which only
-  // repaints on ITS OWN compare and would leave the overflow permanent — don't
-  // put anything else here.
+  // on request, spending the space the deleted connectivity glyph and a TAB_GAP
+  // cut freed (see STATUS_CLK_W in config.h). "23:45" is 63px against F_TITLE's
+  // 35, and the region grew 41 -> 69 to hold it. Anything wider paints into the
+  // tab strip, which only repaints on ITS OWN compare and would leave the
+  // overflow permanent — don't put anything else here.
   if (force_ || hhmm != statusSnap.hhmm) {
     clearHeaderRegion(SCR_W - STATUS_CLK_W, STATUS_CLK_W);
     char clk[8];
     if (hhmm < 0) snprintf(clk, sizeof(clk), "--:--");
     else          snprintf(clk, sizeof(clk), "%02d:%02d", hhmm / 60, hhmm % 60);
-    textAt(F_NUM, clk, SCR_W - SP_2 + 2, STATUS_CY, MR_DATUM,
+    textAt(F_NUM, clk, SCR_W - STATUS_EDGE_DX, STATUS_CY, MR_DATUM,
            hhmm < 0 ? C_DIM : C_TEXT);
   }
 
