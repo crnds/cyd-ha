@@ -96,7 +96,9 @@ struct DeviceState {
 struct AppState {
   DeviceState dev[NUM_DEVICES];
 
-  PageId   page = PAGE_DEVICES;
+  // Boot lands on Scenes, the same page IDLE_HOME_MS returns to, so a restart
+  // (including the 05:30 daily one) leaves the panel where walking up finds it.
+  PageId   page = PAGE_SCENES;
   Settings set;
 
   // Scenes page scroll offset, in GRID ROWS of SCENE_COLS tiles. Deliberately

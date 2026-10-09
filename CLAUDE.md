@@ -412,9 +412,10 @@ to Scenes**, on request, so walking up to the panel always lands on the scene
 grid. `serviceIdleHome()` sits *after* `handleTouch()` for the same reason
 `applySettings()` sits before it: a tap on the pass the timeout fires has just
 reset `lastTouchMs`, so it is never hit-tested against a page that isn't on the
-glass yet. Any contact counts as activity, misses included. The timer starts at
-boot, so a panel nobody touches ends up on Scenes too. Scenes' scroll offset is
-left alone.
+glass yet. Any contact counts as activity, misses included. Scenes' scroll
+offset is left alone. **Boot also lands on Scenes** (`AppState::page`'s
+default), on request, so a restart — the 05:30 daily one included — comes up on
+the same page the idle timeout returns to; `simulator.html` defaults to it too.
 
 **Shared state is one global `AppState S`** (`include/state.h`), holding
 `DeviceState dev[4]`, the current `page`, and the persisted `Settings set`. The

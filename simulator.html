@@ -523,7 +523,7 @@ const sceneMaxRow=()=>Math.max(0, sceneRowsN()-SCENE_VIS_ROWS);
 // haOk alone, exactly as drawNoConn() is. It is kept because it drives the
 // coupling the firmware really has (Wi-Fi down => haOk false), which is what
 // makes the "toggle Wi-Fi down" button and ?wifi=0 meaningful tests of it.
-let stale=false, haOk=true, wifiOk=true, page=PAGE_DEVICES, sceneRow=0, errAt=0;
+let stale=false, haOk=true, wifiOk=true, page=PAGE_SCENES, sceneRow=0, errAt=0;
 // nightMode: 0=off / 1=red / 2=shift, mirroring state.h's NightMode.
 const NIGHT_CHIP_MODE=[0,2,1];   // chip position -> mode: Off, Shift, Red
 let set={briIdx:2, nightMode:0, nightSched:true, flip:false, volIdx:3};
