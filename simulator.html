@@ -609,12 +609,16 @@ function btnActive(d,b){
   if(b===5) return d.ct && kelvinMatches(KELVIN_COOL,d.kelvin);
   return false;
 }
-// Derived every draw, never latched — same as sceneActive() in screen.cpp.
-function sceneActive(idx){
-  if(idx>=SCENE.length) return false;
+// Derived every draw, never latched — same as sceneActive() in
+// screen_scenes.cpp. An offline bulb is skipped (its pip goes red instead), and
+// a tie that only the offline bulb would have broken goes to the earlier scene.
+function sceneMatches(idx){
+  let compared=false;
   for(let i=0;i<NUM_BULBS;i++){
     const d=dev[i], w=SCENE[idx].b[i];
-    if(!d.known || !d.avail) return false;
+    if(!d.known) return false;
+    if(!d.avail) continue;
+    compared=true;
     if(!w.on){ if(d.on) return false; continue; }
     if(!d.on) return false;
     if(d.pct<0 || !pctMatches(w.pct,d.pct)) return false;
@@ -622,6 +626,12 @@ function sceneActive(idx){
       if(!(d.kelvin>0) || !kelvinMatches(w.kelvin,d.kelvin)) return false;
     }
   }
+  return compared;
+}
+function sceneActive(idx){
+  if(idx>=SCENE.length || !sceneMatches(idx)) return false;
+  if(dev.slice(0,NUM_BULBS).every(d=>d.avail)) return true;
+  for(let j=0;j<idx;j++) if(sceneMatches(j)) return false;
   return true;
 }
 
@@ -911,9 +921,10 @@ function drawSceneTile(slot,idx){
   const x=sceneTileX(slot), y=sceneTileY(slot);
   if(idx>=SCENE.length) return;   // empty slot: cleared, nothing drawn
 
-  const unavail=dev.slice(0,NUM_BULBS).some(d=>!d.known||!d.avail);
+  // Only a never-polled bulb greys the grid; an offline one gets a red pip.
+  const unknown=dev.slice(0,NUM_BULBS).some(d=>!d.known);
   let fill,edge,fg,mono=true;
-  if(unavail){ fill=C.SURFACE; edge=C.SURFACE; fg=C.DISABLED; }
+  if(unknown){ fill=C.SURFACE; edge=C.SURFACE; fg=C.DISABLED; }
   else if(isErr()){ fill=C.SURFACE; edge=C.ERROR; fg=C.ERROR; }
   else if(sceneActive(idx)){ fill=tint(C.ACCENT); edge=C.ACCENT; fg=C.ACCENT; mono=false; }
   else { fill=C.SURFACE; edge=C.BORDER; fg=C.TEXT2; mono=false; }
@@ -923,6 +934,7 @@ function drawSceneTile(slot,idx){
   const sc=SCENE[idx], cx=x+SCENE_TILE_W/2, py=y+SCENE_PIP_DY;
   for(let i=0;i<NUM_BULBS;i++){
     const px=cx+(i-1)*SCENE_PIP_GAP, b=sc.b[i];
+    if(dev[i].known && !dev[i].avail){ disc(px,py,SCENE_PIP_R,C.ERROR); continue; }
     if(!b.on){ disc(px,py,SCENE_PIP_R,null,mono?fg:C.DISABLED); continue; }
     let c = mono ? fg
           : !b.kelvin                 ? C.TEXT2

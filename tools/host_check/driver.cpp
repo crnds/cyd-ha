@@ -207,6 +207,25 @@ static void sweepScenes() {
       printf("sceneActive known=%d avail=%d on=%d pct=%d kelvin=%d ct=%d scene=%u -> %d\n",
              c.known, c.avail, c.on, c.pct, c.kelvin, c.ct, idx, sceneActive(idx));
   }
+
+  // One bulb offline, the other two matching. The offline bulb is skipped,
+  // and where two scenes then tie (OFF vs RELAX with bulb 3 down) the earlier
+  // one in the table is the only one lit.
+  printf("== sceneActive, one bulb offline ==\n");
+  const BulbCase live[] = { cases[0], cases[1], cases[2], cases[3] };
+  for (int off = 0; off < NUM_BULBS; off++) {
+    for (const auto& c : live) {
+      for (int i = 0; i < NUM_BULBS; i++) {
+        DeviceState& d = S.dev[i];
+        d.known = true; d.avail = (i != off); d.on = c.on;
+        d.pct = c.pct; d.kelvin = c.kelvin; d.supportsCT = c.ct;
+      }
+      printf("offline=%d on=%d pct=%d kelvin=%d ->", off, c.on, c.pct, c.kelvin);
+      for (uint16_t idx = 0; idx < sceneCount(); idx++)
+        printf(" %d", sceneActive(idx));
+      printf("\n");
+    }
+  }
 }
 
 // ── 6: pure geometry ──────────────────────────────────────────────────────

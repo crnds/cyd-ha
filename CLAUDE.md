@@ -525,6 +525,17 @@ out nothing.
 - **An unknown kelvin is "cannot confirm", not "match".** Treating it as a match
   lights AWAKE and DAY simultaneously — they differ only there — and two active
   cards reads as a bug.
+- **An OFFLINE bulb is skipped, not a veto, and its pip goes solid red.** It
+  used to grey every tile (`BV_DISABLED`) and fail every match, so one bulb
+  dropping off the network blanked the whole grid and hid the active scene.
+  Now `sceneMatches()` compares the reachable bulbs only, every tile draws that
+  bulb's pip in `C_ERROR` (solid, since a ring already means "turns it off"),
+  and `SceneSnap::offline` forces a redraw when the mask changes, since a pip
+  colour moves no tile's vis byte. Two consequences are deliberate: a tie the
+  offline bulb would have broken (OFF vs RELAX with bulb 3 down) goes to the
+  **earlier** scene in the table, so only one tile ever lights; and with every
+  bulb offline nothing matches. A **never-polled** bulb (`!known`, i.e. boot)
+  still greys the grid — that is "nothing known yet", not "one bulb down".
 - **A scene is 1–2 HTTP calls, not 6.** `light.turn_on` accepts a *list* of
   `entity_id`, and brightness + colour temp go in one call. Three separate calls
   would be three sequential `HTTP_READ_SVC_MS` budgets (4.5 s of frozen `loop()`)

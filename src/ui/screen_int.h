@@ -134,6 +134,7 @@ struct SceneSnap {
   uint16_t row;                     // scroll offset these slots were drawn at
   uint8_t  vis[SCENE_PER_PAGE];
   uint8_t  sbVis;                   // gutter: 0 idle, 1 up held, 2 down held
+  uint8_t  offline;                 // bulb bitmask whose pips were drawn red
 };
 extern SceneSnap sceneSnap;         // screen_scenes.cpp
 

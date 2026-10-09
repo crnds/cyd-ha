@@ -8281,6 +8281,19 @@ sceneActive known=1 avail=1 on=1 pct=100 kelvin=-1 ct=0 scene=1 -> 0
 sceneActive known=1 avail=1 on=1 pct=100 kelvin=-1 ct=0 scene=2 -> 0
 sceneActive known=1 avail=1 on=1 pct=100 kelvin=-1 ct=0 scene=3 -> 1
 sceneActive known=1 avail=1 on=1 pct=100 kelvin=-1 ct=0 scene=4 -> 1
+== sceneActive, one bulb offline ==
+offline=0 on=0 pct=-1 kelvin=-1 -> 1 0 0 0 0
+offline=0 on=1 pct=30 kelvin=2202 -> 0 0 1 0 0
+offline=0 on=1 pct=100 kelvin=2202 -> 0 0 0 1 0
+offline=0 on=1 pct=100 kelvin=4000 -> 0 0 0 0 1
+offline=1 on=0 pct=-1 kelvin=-1 -> 1 0 0 0 0
+offline=1 on=1 pct=30 kelvin=2202 -> 0 0 1 0 0
+offline=1 on=1 pct=100 kelvin=2202 -> 0 0 0 1 0
+offline=1 on=1 pct=100 kelvin=4000 -> 0 0 0 0 1
+offline=2 on=0 pct=-1 kelvin=-1 -> 1 0 0 0 0
+offline=2 on=1 pct=30 kelvin=2202 -> 0 0 1 0 0
+offline=2 on=1 pct=100 kelvin=2202 -> 0 0 0 1 0
+offline=2 on=1 pct=100 kelvin=4000 -> 0 0 0 0 1
 == btnRect ==
 btnRect dev=0 b=0 -> x=60 y=6 w=43 h=40
 btnRect dev=0 b=1 -> x=107 y=6 w=43 h=40

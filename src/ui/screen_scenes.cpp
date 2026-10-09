@@ -59,23 +59,24 @@ int16_t sceneTileY(uint8_t slot) {
   return ROWS_Y0 + (slot / SCENE_COLS) * SCENE_PITCH_Y;
 }
 
-// A scene is ACTIVE when the LIVE state of all three bulbs matches its
-// definition. Derived every render, never latched — that is exactly what makes
-// overriding one bulb on the Devices page deselect the scene, and what makes a
-// change from the HA app select the matching one, with no "current scene"
-// variable to fall out of sync.
-bool sceneActive(uint16_t idx) {
-  if (idx >= SCENE_N) return false;
+// Does the LIVE state of every REACHABLE bulb match this scene's definition?
+// An unavailable bulb is skipped rather than failing the match: it has no
+// current state to compare, and letting it veto every scene blanked the whole
+// grid the moment one bulb dropped off the network — the tile drawing a red
+// pip for it is what says that bulb is not being vouched for.
+static bool sceneMatches(uint16_t idx) {
   const Scene& sc = SCENE[idx];
+  bool compared = false;
 
   for (uint8_t i = 0; i < NUM_BULBS; i++) {
     const DeviceState& d = S.dev[i];
     const SceneBulb&   w = sc.b[i];
 
-    // Same rule as btnActive(): with no current state there is nothing to
-    // highlight, and a lit tile would claim the room is in a state we cannot
-    // actually see.
-    if (!d.known || !d.avail) return false;
+    // Never polled is different from offline: that is boot, nothing at all is
+    // known yet, and a lit tile would claim a room state we have not seen.
+    if (!d.known) return false;
+    if (!d.avail) continue;
+    compared = true;
 
     if (!w.on) { if (d.on) return false; continue; }   // want off
     if (!d.on) return false;                           // want on, is off
@@ -95,6 +96,31 @@ bool sceneActive(uint16_t idx) {
       if (d.kelvin <= 0 || !kelvinMatches(w.kelvin, d.kelvin)) return false;
     }
   }
+  // With every bulb offline there is nothing left to match on, and "matches
+  // vacuously" would light every tile at once.
+  return compared;
+}
+
+// A scene is ACTIVE when the LIVE state of the bulbs matches its definition.
+// Derived every render, never latched — that is exactly what makes overriding
+// one bulb on the Devices page deselect the scene, and what makes a change from
+// the HA app select the matching one, with no "current scene" variable to fall
+// out of sync.
+//
+// With a bulb offline, two scenes that differ ONLY in that bulb both match
+// (OFF and RELAX, with bulb 3 down). Two lit tiles reads as a bug, so the
+// earlier one in the table wins. With every bulb reachable the table cannot
+// produce a tie, so the scan is skipped and the common path costs what it did.
+bool sceneActive(uint16_t idx) {
+  if (idx >= SCENE_N || !sceneMatches(idx)) return false;
+
+  bool anyOffline = false;
+  for (uint8_t i = 0; i < NUM_BULBS; i++)
+    if (!S.dev[i].avail) anyOffline = true;
+  if (!anyOffline) return true;
+
+  for (uint16_t j = 0; j < idx; j++)
+    if (sceneMatches(j)) return false;
   return true;
 }
 
@@ -136,7 +162,10 @@ void scenePlan(uint16_t idx, uint8_t& offMask, uint8_t& onMask,
 }
 
 // One tile. `slot` is where it sits on screen, `idx` which scene it shows.
-static void drawSceneTile(uint8_t slot, uint16_t idx, uint8_t vis) {
+// `offline` is a bitmask of bulbs HA reports unavailable; their pips are drawn
+// red whatever the scene would set them to.
+static void drawSceneTile(uint8_t slot, uint16_t idx, uint8_t vis,
+                          uint8_t offline) {
   const int16_t x = sceneTileX(slot), y = sceneTileY(slot);
 
   // A slot past the end of the table is blanked with the same rect the tile
@@ -180,6 +209,14 @@ static void drawSceneTile(uint8_t slot, uint16_t idx, uint8_t vis) {
   for (uint8_t i = 0; i < NUM_BULBS; i++) {
     const int16_t px = cx + ((int16_t)i - 1) * SCENE_PIP_GAP;
     const SceneBulb& b = sc.b[i];
+    // An unreachable bulb is a solid red pip, the same C_ERROR its own card's
+    // border and icon carry on Devices. Solid, not a ring: a ring already
+    // means "this scene turns it off". The press flash keeps its mono pips —
+    // it lasts PRESS_FLASH_MS and is about the tap, not the bulbs.
+    if ((offline & (1u << i)) && vis != BV_PRESSED) {
+      wPip(px, py, SCENE_PIP_R, C_ERROR, true);
+      continue;
+    }
     if (!b.on) {
       wPip(px, py, SCENE_PIP_R, mono ? fg : C_DISABLED, false);
       continue;
@@ -250,17 +287,22 @@ static void drawSceneScrollbar(uint8_t pressed) {
 void drawScenes() {
   const uint32_t now = millis();
 
-  bool anyErr = false, unavail = false;
+  bool    anyErr  = false, unknown = false;
+  uint8_t offline = 0;
   for (uint8_t i = 0; i < NUM_BULBS; i++) {
     bool devStale, devErr;
     staleErr(S.dev[i], now, devStale, devErr);
     if (devErr) anyErr = true;
-    if (!S.dev[i].known || !S.dev[i].avail)            unavail = true;
+    if (!S.dev[i].known)      unknown = true;
+    else if (!S.dev[i].avail) offline |= (uint8_t)(1u << i);
   }
 
   // A scroll re-points every slot at a different scene, so not one of the cached
   // vis bytes describes what is now meant to be there. Treat it as a first draw.
-  const bool     first = !sceneSnap.valid || sceneSnap.row != S.sceneRow;
+  // A bulb going offline or coming back recolours a pip on EVERY tile without
+  // necessarily moving any tile's vis byte, so it forces a full redraw too.
+  const bool     first = !sceneSnap.valid || sceneSnap.row != S.sceneRow
+                      || sceneSnap.offline != offline;
   const uint16_t base  = (uint16_t)(S.sceneRow * SCENE_COLS);
 
   for (uint8_t slot = 0; slot < SCENE_PER_PAGE; slot++) {
@@ -275,7 +317,11 @@ void drawScenes() {
     // An empty slot shares BV_DISABLED, which is safe because slot -> idx is
     // fixed for a given scroll offset: a slot that is empty stays empty until
     // `row` changes, and that forces a full redraw anyway.
-    if (idx >= SCENE_N || unavail)                     vis = BV_DISABLED;
+    // Only a NEVER-POLLED bulb greys the grid (boot: nothing is known yet). An
+    // unavailable one used to as well, which blanked every tile and hid the
+    // active scene for as long as one bulb was off the network; its pip turns
+    // red instead (drawSceneTile) and the rest of the grid carries on.
+    if (idx >= SCENE_N || unknown)                     vis = BV_DISABLED;
     else if (pressedNow(HIT_SCENE, (int16_t)idx, -1))  vis = BV_PRESSED;
     // The error belongs to the page, not to one tile — nothing here remembers
     // which scene was tapped once the press flash has expired.
@@ -284,7 +330,7 @@ void drawScenes() {
 
     if (!first && vis == sceneSnap.vis[slot]) continue;
     sceneSnap.vis[slot] = vis;
-    drawSceneTile(slot, idx, vis);
+    drawSceneTile(slot, idx, vis, offline);
   }
 
   // The thumb's position depends only on `row`, so `first` already covers moving
@@ -297,8 +343,9 @@ void drawScenes() {
     drawSceneScrollbar(sb);
   }
 
-  sceneSnap.row   = S.sceneRow;
-  sceneSnap.valid = true;
+  sceneSnap.row     = S.sceneRow;
+  sceneSnap.offline = offline;
+  sceneSnap.valid   = true;
 
   // The AC card, in the row band below the grid — the SAME card the Devices
   // page draws, through the same function, so its chips, stepper, press flash,
